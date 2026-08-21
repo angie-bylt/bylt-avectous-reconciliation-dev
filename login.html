@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>BYLT Reconciliation — Sign In</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">BYLT</div>
+</header>
+
+<main style="max-width:420px; margin:80px auto;">
+  <div class="panel">
+    <h2>Sign in</h2>
+    <div class="sub">Enter the site password to view the reconciliation dashboard.</div>
+    <input type="password" id="pw" placeholder="Password" autofocus
+      style="width:100%; padding:10px 12px; border:1px solid var(--border); border-radius:6px; font-size:14px; margin-bottom:12px;">
+    <button class="primary" id="submitBtn" style="width:100%;">Sign in</button>
+    <div id="err" style="color:var(--red); font-size:12.5px; margin-top:10px;"></div>
+  </div>
+</main>
+
+<script>
+document.getElementById('submitBtn').addEventListener('click', submit);
+document.getElementById('pw').addEventListener('keydown', e => { if(e.key === 'Enter') submit(); });
+
+async function submit(){
+  const password = document.getElementById('pw').value;
+  const errEl = document.getElementById('err');
+  errEl.textContent = '';
+  try{
+    const res = await fetch('/api/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ password })
+    });
+    const data = await res.json();
+    if(data.ok){
+      window.location.href = 'index.html';
+    } else {
+      errEl.textContent = data.error || 'Incorrect password.';
+    }
+  } catch(err){
+    errEl.textContent = 'Could not reach the login service. This page needs to be opened via your live Netlify URL (not a local file) for sign-in to work.';
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,675 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>BYLT Reconciliation — Load Data</title>
+<link rel="stylesheet" href="style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
+<script src="auth-check.js"></script>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">BYLT</div>
+  <nav>
+    <a href="index.html">Dashboard</a>
+    <a href="load-data.html" class="current">Load Data</a>
+    <a href="totals.html">Totals</a>
+    <a href="#" id="logoutLink" style="margin-left:24px;">Log out</a>
+  </nav>
+</header>
+<div class="crumbline">
+  <h1>Load Data</h1>
+  <div class="path">Load a NetSuite export and an Avectous export for each area, then compare. It's saved in this browser — open the Dashboard or Totals tab in the same browser to see it.</div>
+</div>
+
+<main>
+  <div class="callout">
+    Only working on one or two areas right now? That's fine — just load and compare those. Everything else on the <a href="index.html">Dashboard</a> will simply say "not loaded yet" until you get to it.
+  </div>
+
+  <div class="panel" id="fulfillment-summary-panel">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">
+      <div>
+        <h2>Sales Orders & Transfer Orders Fulfillment Status</h2>
+        <div class="sub">Warehouse shipping progress — not an integration check</div>
+        <a href="#" id="fs-link-fulfillable" target="_blank" rel="noopener" style="font-size:12px; color:var(--blue); font-weight:600;">Open Fulfillable Orders in NetSuite ↗</a>
+        <a href="#" id="fs-link-nsfulfilled" target="_blank" rel="noopener" style="font-size:12px; color:var(--blue); font-weight:600; margin-left:14px;">Open NetSuite Fulfilled ↗</a>
+        <a href="#" id="fs-link-avshipped" target="_blank" rel="noopener" style="font-size:12px; color:var(--blue); font-weight:600; margin-left:14px;">Open Avectous Shipped ↗</a>
+      </div>
+      <span class="status-pill" id="fs-pill">Not loaded</span>
+    </div>
+    <div class="upload-row">
+      <div class="upload-box">
+        <label>Fulfillable Orders export (.csv or .xlsx)</label>
+        <input type="file" accept=".csv,.xlsx,.xls" data-fs-side="fulfillable">
+        <div class="upload-status" id="fs-status-fulfillable">No file loaded</div>
+      </div>
+      <div class="upload-box">
+        <label>NetSuite Fulfilled export (.csv or .xlsx)</label>
+        <input type="file" accept=".csv,.xlsx,.xls" data-fs-side="nsfulfilled">
+        <div class="upload-status" id="fs-status-nsfulfilled">No file loaded</div>
+      </div>
+      <div class="upload-box">
+        <label>Avectous Shipped export (.csv or .xlsx)</label>
+        <input type="file" accept=".csv,.xlsx,.xls" data-fs-side="avshipped">
+        <div class="upload-status" id="fs-status-avshipped">No file loaded</div>
+      </div>
+    </div>
+    <div style="margin:12px 0; display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
+      <label style="font-size:12px; font-weight:700; color:var(--navy); text-transform:uppercase; letter-spacing:0.4px;">Date range (optional)</label>
+      <input type="date" id="fs-date-from" style="padding:6px 8px; border:1px solid var(--border); border-radius:6px; font-size:13px;">
+      <span style="color:var(--muted); font-size:13px;">to</span>
+      <input type="date" id="fs-date-to" style="padding:6px 8px; border:1px solid var(--border); border-radius:6px; font-size:13px;">
+      <span style="font-size:12px; color:var(--muted);">Filters by the Fulfillable Orders file's own Date column. Leave blank for all dates.</span>
+    </div>
+    <div class="run-row">
+      <button class="primary" id="fs-run" disabled>Compare This Area</button>
+      <span class="run-note" id="note-fulfillment_summary">Load the Fulfillable Orders file above to enable this.</span>
+    </div>
+  </div>
+
+  <div id="sections"></div>
+</main>
+
+<script src="app.js"></script>
+<script>
+document.getElementById('logoutLink').addEventListener('click', (e)=>{ e.preventDefault(); logout(); });
+
+const sectionsEl = document.getElementById('sections');
+
+SECTIONS.forEach(s=>{
+  const panel = document.createElement('div');
+  panel.className = 'panel';
+  panel.id = 'panel-'+s.id;
+  panel.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;">
+      <div>
+        <h2>${s.title}</h2>
+        <div class="sub">${s.sub}</div>
+        ${s.netsuiteUrl ? `<a href="${s.netsuiteUrl}" id="nslink-${s.id}" target="_blank" rel="noopener" style="font-size:12px; color:var(--blue); font-weight:600;">Open in NetSuite ↗</a>` : ''}
+        ${s.secondUrl ? `<a href="${s.secondUrl}" target="_blank" rel="noopener" style="font-size:12px; color:var(--blue); font-weight:600; margin-left:14px;">Open in ${s.secondLabel || 'Avectous'} ↗</a>` : ''}
+        ${s.supplementaryFile && s.supplementaryFile.url ? `<a href="${s.supplementaryFile.url}" target="_blank" rel="noopener" style="font-size:12px; color:var(--blue); font-weight:600; margin-left:14px;">Open ${s.supplementaryFile.label} ↗</a>` : ''}
+      </div>
+      <span class="status-pill" id="pill-${s.id}">Not loaded</span>
+    </div>
+    ${s.supportsAuditLevelToggle ? `
+    <div class="audit-level-toggle" style="margin:10px 0; padding:10px 12px; background:#fafbfc; border:1px solid var(--border); border-radius:6px; font-size:12.5px;">
+      <div style="font-weight:600; margin-bottom:6px;">Audit level — don't have line-level data yet? Switch to order-level.</div>
+      <label style="margin-right:16px; cursor:pointer;"><input type="radio" name="auditLevel-${s.id}" value="line" data-audit-level="${s.id}" checked> Line (Order + Product + Qty)</label>
+      <label style="cursor:pointer;"><input type="radio" name="auditLevel-${s.id}" value="order" data-audit-level="${s.id}"> Order only (Order Number, ignores product/qty)</label>
+    </div>` : ''}
+    <div class="upload-row">
+      <div class="upload-box">
+        <label>NetSuite export (.csv or .xlsx)</label>
+        <input type="file" accept=".csv,.xlsx,.xls" data-side="ns" data-section="${s.id}">
+        <div class="upload-status" data-status="ns-${s.id}">No file loaded</div>
+      </div>
+      <div class="upload-box">
+        <label>${s.secondLabel || 'Avectous'} export (.csv or .xlsx)</label>
+        <input type="file" accept=".csv,.xlsx,.xls" data-side="av" data-section="${s.id}">
+        <div class="upload-status" data-status="av-${s.id}">No file loaded</div>
+      </div>
+      ${s.supplementaryFile ? `
+      <div class="upload-box">
+        <label>${s.supplementaryFile.label} export (.csv or .xlsx) — optional</label>
+        <input type="file" accept=".csv,.xlsx,.xls" data-side="supp" data-section="${s.id}">
+        <div class="upload-status" data-status="supp-${s.id}">No file loaded — mismatches won't be checked against ${s.supplementaryFile.label.toLowerCase()}</div>
+      </div>` : ''}
+    </div>
+    <div class="mapping-toggle" data-maptoggle="${s.id}">Column mapping looks wrong? Fix it ▾</div>
+    <div class="mapping-body" id="mapping-${s.id}"></div>
+    <div class="run-row">
+      <button class="primary" id="run-${s.id}" disabled>Compare This Area</button>
+      <span class="run-note" id="note-${s.id}">Load both files above to enable this.</span>
+      ${s.supplementaryFile ? `<button class="ghost" id="fullreport-${s.id}" disabled title="Run Compare This Area first" style="margin-left:auto;">Export Full Report ↓</button>` : ''}
+    </div>
+  `;
+  sectionsEl.appendChild(panel);
+});
+
+const localState = {};
+SECTIONS.forEach(s=>{ localState[s.id] = { ns:null, av:null, mapping:{}, auditLevel:'line' }; });
+
+document.querySelectorAll('input[type=file]').forEach(inp=>{
+  inp.addEventListener('change', (e)=>{
+    const sectionId = e.target.getAttribute('data-section');
+    const side = e.target.getAttribute('data-side');
+    const s = SECTIONS.find(x=>x.id===sectionId);
+    const file = e.target.files[0];
+    if(!file) return;
+
+    const statusEl = document.querySelector(`[data-status="${side}-${s.id}"]`);
+    const ext = file.name.split('.').pop().toLowerCase();
+
+    if(ext === 'xlsx' || ext === 'xls'){
+      parseExcelFile(file, s, side, statusEl);
+    } else {
+      parseCsvFile(file, s, side, statusEl);
+    }
+  });
+});
+
+document.querySelectorAll('[data-audit-level]').forEach(radio=>{
+  radio.addEventListener('change', (e)=>{
+    const sectionId = e.target.getAttribute('data-audit-level');
+    const s = SECTIONS.find(x=>x.id===sectionId);
+    localState[sectionId].auditLevel = e.target.value;
+    localState[sectionId].mapping = {}; // reset so mapping re-guesses against the new field set
+
+    const nsLink = document.getElementById('nslink-'+sectionId);
+    if(nsLink){
+      if(e.target.value === 'order' && s.orderLevelVariant && s.orderLevelVariant.netsuiteUrlOverride){
+        nsLink.href = s.orderLevelVariant.netsuiteUrlOverride;
+      } else {
+        nsLink.href = s.netsuiteUrl;
+      }
+    }
+
+    maybeShowMapping(s);
+  });
+});
+
+function parseCsvFile(file, s, side, statusEl){
+  Papa.parse(file, {
+    header:true, skipEmptyLines:true,
+    complete:(res)=>{
+      const rows = res.data;
+      const headers = res.meta.fields || Object.keys(rows[0]||{});
+      localState[s.id][side] = {headers, rows};
+      statusEl.textContent = `${file.name} — ${rows.length.toLocaleString()} rows`;
+      statusEl.classList.add('ok');
+      maybeShowMapping(s);
+    },
+    error:(err)=>{
+      statusEl.textContent = 'Error: '+err.message;
+    }
+  });
+}
+
+function tryParseInventorySnapshotReport(aoa){
+  // NetSuite's native "Inventory Snapshot" report (not a saved search export)
+  // has a distinctive structure: several metadata rows, a two-row grouped
+  // header (location name(s), then repeated sub-column names per group),
+  // and a "Total" footer row. A saved search export never looks like this,
+  // so a specific "Location:" line is a reliable, unique signal to detect it.
+  const locationRowIdx = aoa.findIndex(row => row.some(c => String(c ?? '').trim().toLowerCase().startsWith('location:')));
+  if(locationRowIdx === -1) return null;
+
+  // The group-header row is the first row after that with more than one
+  // populated cell (e.g. ['Name', '810 Texas DC', 'Total']); the row right
+  // after it holds the repeated sub-column names for each group.
+  const countNonEmpty = row => row.filter(c => c !== '' && c !== undefined && c !== null).length;
+  let groupHeaderIdx = -1;
+  for(let i = locationRowIdx + 1; i < Math.min(locationRowIdx + 6, aoa.length); i++){
+    if(countNonEmpty(aoa[i]) > 1){ groupHeaderIdx = i; break; }
+  }
+  if(groupHeaderIdx === -1 || groupHeaderIdx + 1 >= aoa.length) return null;
+  const subHeaderRow = aoa[groupHeaderIdx + 1].map(h => String(h ?? '').trim());
+
+  // Use the first (leftmost) group specifically — that's the named location
+  // from the "Location:" line, not the "Total" group further right, which
+  // would silently include other locations if this business ever expands.
+  const qtyOnHandCol = subHeaderRow.findIndex(h => norm(h) === norm('Current Quantity On Hand'));
+  if(qtyOnHandCol === -1) return null;
+
+  const rows = [];
+  for(let i = groupHeaderIdx + 2; i < aoa.length; i++){
+    const row = aoa[i];
+    if(countNonEmpty(row) === 0) continue;
+    const sku = row[0];
+    if(!sku || String(sku).trim().toLowerCase() === 'total') continue; // skip the grand-total footer row
+    const qtyRaw = row[qtyOnHandCol];
+    rows.push({ SKU: sku, 'NS On Hand': (qtyRaw === '' || qtyRaw === null || qtyRaw === undefined) ? 0 : qtyRaw });
+  }
+  return rows;
+}
+
+function sheetToSmartRows(sheet){
+  const aoa = XLSX.utils.sheet_to_json(sheet, {header:1, defval:''});
+  if(!aoa.length) return [];
+
+  const snapshotRows = tryParseInventorySnapshotReport(aoa);
+  if(snapshotRows) return snapshotRows;
+
+  // Some exports (e.g. VESYL) have a single-cell title row above the real
+  // headers. A true header row has several populated columns; a title row
+  // typically has just one. Scan the first few rows for the first one that
+  // looks like real headers, rather than blindly trusting row 0.
+  const countNonEmpty = row => row.filter(c => c !== '' && c !== undefined && c !== null).length;
+  let headerRowIndex = 0;
+  for(let i = 0; i < Math.min(5, aoa.length); i++){
+    if(countNonEmpty(aoa[i]) > 1){ headerRowIndex = i; break; }
+  }
+
+  const headers = aoa[headerRowIndex].map(h => String(h ?? '').trim());
+  const rows = [];
+  for(let i = headerRowIndex + 1; i < aoa.length; i++){
+    const rawRow = aoa[i];
+    if(countNonEmpty(rawRow) === 0) continue; // skip fully blank rows
+    const obj = {};
+    headers.forEach((h, idx) => { obj[h] = rawRow[idx] !== undefined ? rawRow[idx] : ''; });
+    rows.push(obj);
+  }
+  return rows;
+}
+
+function parseExcelFile(file, s, side, statusEl){
+  const reader = new FileReader();
+  reader.onload = (e)=>{
+    try{
+      const data = new Uint8Array(e.target.result);
+      const workbook = XLSX.read(data, {type:'array'});
+
+      // Avectous (and sometimes NetSuite) exports can land as several
+      // sheets with generic names (Sheet1 (1), Sheet1 (2)...) that are
+      // really just batches of the same data. Combine every sheet whose
+      // headers match the first sheet; skip — and report — any sheet
+      // that's structurally different (e.g. a shipping-manifest export
+      // mixed into the same workbook).
+      let combinedRows = [];
+      let referenceHeaders = null;
+      const usedSheets = [];
+      const skippedSheets = [];
+
+      workbook.SheetNames.forEach(sheetName=>{
+        const sheet = workbook.Sheets[sheetName];
+        const rows = sheetToSmartRows(sheet);
+        if(!rows.length) return; // empty sheet, nothing to combine or skip
+        const headers = Object.keys(rows[0]);
+
+        if(!referenceHeaders){
+          referenceHeaders = headers;
+          combinedRows = combinedRows.concat(rows);
+          usedSheets.push(sheetName);
+          return;
+        }
+
+        const sameSchema = headers.length === referenceHeaders.length &&
+          headers.every((h, i) => h === referenceHeaders[i]);
+
+        if(sameSchema){
+          combinedRows = combinedRows.concat(rows);
+          usedSheets.push(sheetName);
+        } else {
+          skippedSheets.push(sheetName);
+        }
+      });
+
+      const headers = referenceHeaders || [];
+      localState[s.id][side] = {headers, rows: combinedRows};
+
+      let statusText = `${file.name}`;
+      if(usedSheets.length > 1){
+        statusText += ` (combined ${usedSheets.length} sheets: ${usedSheets.join(', ')})`;
+      } else {
+        statusText += ` (sheet: ${usedSheets[0] || 'none'})`;
+      }
+      statusText += ` — ${combinedRows.length.toLocaleString()} rows`;
+      if(skippedSheets.length){
+        statusText += `. Skipped ${skippedSheets.length} sheet(s) with a different structure: ${skippedSheets.join(', ')}.`;
+      }
+      statusEl.textContent = statusText;
+      statusEl.classList.add('ok');
+      maybeShowMapping(s);
+    } catch(err){
+      statusEl.textContent = 'Error reading Excel file: '+err.message;
+    }
+  };
+  reader.onerror = ()=>{
+    statusEl.textContent = 'Error reading file.';
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+document.querySelectorAll('[data-maptoggle]').forEach(el=>{
+  el.addEventListener('click', ()=>{
+    const id = el.getAttribute('data-maptoggle');
+    const body = document.getElementById('mapping-'+id);
+    const open = body.classList.toggle('open');
+    el.textContent = open ? 'Column mapping looks wrong? Fix it ▴' : 'Column mapping looks wrong? Fix it ▾';
+  });
+});
+
+function maybeShowMapping(s){
+  const st = localState[s.id];
+  if(!st.ns || !st.av) return;
+  document.getElementById('run-'+s.id).disabled = false;
+  document.getElementById('note-'+s.id).textContent = 'Ready — check the mapping if needed, then compare.';
+
+  const effectiveS = getEffectiveSection(s, st.auditLevel);
+  const allFields = [...effectiveS.keyFields, ...effectiveS.compareFields];
+  let html = `<div class="mapping-grid"><div class="head">Field</div><div class="head">NetSuite column</div><div class="head">Avectous column</div>`;
+  allFields.forEach(f=>{
+    if(!st.mapping[f.field]){
+      st.mapping[f.field] = { ns: guessColumn(st.ns.headers, f.ns), av: guessColumn(st.av.headers, f.av) };
+    }
+    const m = st.mapping[f.field];
+    html += `
+      <div>${f.label}</div>
+      <div><select data-field="${f.field}" data-side="ns" data-section="${s.id}">
+        ${st.ns.headers.map(h=>`<option value="${escapeAttr(h)}" ${h===m.ns?'selected':''}>${escapeHtml(h)}</option>`).join('')}
+      </select></div>
+      <div><select data-field="${f.field}" data-side="av" data-section="${s.id}">
+        ${st.av.headers.map(h=>`<option value="${escapeAttr(h)}" ${h===m.av?'selected':''}>${escapeHtml(h)}</option>`).join('')}
+      </select></div>
+    `;
+  });
+  html += `</div>`;
+  const mapDiv = document.getElementById('mapping-'+s.id);
+  mapDiv.innerHTML = html;
+  mapDiv.querySelectorAll('select').forEach(sel=>{
+    sel.addEventListener('change', ()=>{
+      const field = sel.getAttribute('data-field');
+      const side = sel.getAttribute('data-side');
+      localState[s.id].mapping[field][side] = sel.value;
+    });
+  });
+}
+SECTIONS.forEach(s=>{
+  document.getElementById('run-'+s.id).addEventListener('click', async ()=>{
+    const noteEl = document.getElementById('note-'+s.id);
+    try{
+      const st = localState[s.id];
+      const effectiveS = getEffectiveSection(s, st.auditLevel);
+      const result = computeComparison(effectiveS, st.ns, st.av, st.mapping, st.supp);
+      result.auditLevelUsed = st.auditLevel;
+
+      let name = prompt('Who\u2019s running this comparison? (helps the team know who last ran it)', getLastUsedName());
+      if(name === null) name = ''; // cancelled — proceed anyway, just without a name
+      name = name.trim();
+      if(name) setLastUsedName(name);
+
+      saveSectionResult(s.id, result, name); // local fallback, always works regardless of sync
+      document.getElementById('pill-'+s.id).textContent = 'Compared ✓';
+      document.getElementById('pill-'+s.id).classList.add('ready');
+      if(s.supplementaryFile){
+        const fullReportBtn = document.getElementById('fullreport-'+s.id);
+        if(fullReportBtn){
+          fullReportBtn.disabled = false;
+          fullReportBtn.title = '';
+          fullReportBtn.onclick = async () => {
+            const originalText = fullReportBtn.textContent;
+            fullReportBtn.disabled = true;
+            fullReportBtn.textContent = 'Building file…';
+            try{
+              await exportInventoryFullReport(s, st, result);
+            } catch(err){
+              console.error('Export Full Report failed:', err);
+              alert(`Export Full Report failed: ${err.message}\n\nScreenshot this and send it over.`);
+            } finally {
+              fullReportBtn.disabled = false;
+              fullReportBtn.textContent = originalText;
+            }
+          };
+        }
+      }
+      noteEl.textContent = 'Saved locally — syncing…';
+      await syncToShared(s.id, result, name);
+    } catch(err){
+      console.error('Compare This Area failed for', s.id, err);
+      noteEl.innerHTML = `<span style="color:var(--red); font-weight:600;">Something went wrong: ${escapeHtml(err.message)}</span> — screenshot this and send it over.`;
+    }
+  });
+});
+
+async function exportInventoryFullReport(s, st, result){
+  const workbook = new ExcelJS.Workbook();
+  const NAVY = 'FF1F4E78';
+
+  // --- Summary sheet ---
+  const summary = workbook.addWorksheet('Summary');
+  summary.getColumn(1).width = 28;
+  summary.getColumn(2).width = 16;
+  summary.getColumn(4).width = 16;
+  const titleRow = summary.addRow([`${s.secondLabel || 'Avectous'} vs NetSuite Inventory Summary`]);
+  titleRow.font = { bold: true, size: 13 };
+  summary.addRow([null, null, null, 'Last Updated']);
+  const stats = result.inventoryStats || {};
+  const totalMismatches = stats.unexplainedMismatchCount || 0;
+  const rows = [
+    [`Total SKUs in ${s.secondLabel || 'Avectous'}`, result.totalAv, null, null],
+    ['Total Matches', result.matchedCount, null, new Date()],
+    ['Total Mismatches', totalMismatches, null, null],
+    ['SKU Discrepancy Rate', (stats.skuDiscrepancyRate || 0) / 100, null, null],
+    [null, null, null, null],
+    [`Total Units in ${s.secondLabel || 'Avectous'}`, stats.totalAvUnits || 0, null, null],
+    ['Total Unit Discrepancy', stats.totalUnitDiscrepancy || 0, null, null],
+    ['Quantity Discrepancy Rate', (stats.qtyDiscrepancyRate || 0) / 100, null, null],
+  ];
+  rows.forEach(r => summary.addRow(r));
+  summary.getCell('D2').font = { bold: true };
+  ['B6','B10'].forEach(addr => { summary.getCell(addr).numFmt = '0.00%'; });
+
+  // --- Comparison sheet ---
+  const comp = workbook.addWorksheet('Comparison');
+  const compRows = result.inventoryComparisonRows || [];
+  if(compRows.length){
+    const cols = Object.keys(compRows[0]);
+    const headerRow = comp.addRow(cols);
+    headerRow.eachCell(c => { c.font = { bold: true, color: { argb: 'FFFFFFFF' } }; c.fill = { type:'pattern', pattern:'solid', fgColor:{argb:NAVY} }; });
+    compRows.forEach(r => comp.addRow(cols.map(c => r[c])));
+    cols.forEach((c, i) => { comp.getColumn(i+1).width = Math.max(14, c.length + 2); });
+  }
+
+  // --- Raw data sheets (as originally uploaded) ---
+  function addRawSheet(name, data){
+    if(!data || !data.rows || !data.rows.length) return;
+    const sheet = workbook.addWorksheet(name);
+    const headerRow = sheet.addRow(data.headers);
+    headerRow.eachCell(c => { c.font = { bold: true }; });
+    data.rows.forEach(r => sheet.addRow(data.headers.map(h => r[h])));
+    data.headers.forEach((h, i) => { sheet.getColumn(i+1).width = Math.max(12, String(h).length + 2); });
+  }
+  addRawSheet(s.secondLabel || 'Avectous', st.av);
+  addRawSheet('NetSuite', st.ns);
+  if(s.supplementaryFile) addRawSheet(s.supplementaryFile.label, st.supp);
+
+  const buffer = await workbook.xlsx.writeBuffer();
+  const blob = new Blob([buffer], { type: 'application/octet-stream' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${s.id}_full_report.xlsx`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+async function syncToShared(sectionId, result, ranBy){
+  const noteEl = document.getElementById('note-'+sectionId);
+
+  // Same size problem as local storage, different cause: Netlify Functions
+  // (Lambda under the hood) reject request bodies over a hard size limit
+  // (HTTP 413) — this hits large sections (tens of thousands of rows)
+  // even though local storage's own tiers succeeded. Try progressively
+  // lighter payloads rather than failing outright on the first oversized one.
+  const tier1 = (()=>{
+    const { _slim, ...withoutSlim } = result;
+    return result.lineComparison ? { ...withoutSlim, lineComparison: [], lineComparisonTruncatedInSync: true } : withoutSlim;
+  })();
+  const tier2 = { ...tier1, missingRows: (result.missingRows||[]).slice(0,500), discrepancies: (result.discrepancies||[]).slice(0,500), rowsTruncatedInSync: true };
+  const tier3 = Object.fromEntries(
+    Object.entries(tier2).filter(([k,v]) => !Array.isArray(v) && (v === null || typeof v !== 'object'))
+  );
+  tier3.summaryOnlyInSync = true;
+  const attempts = [result, tier1, tier2, tier3];
+
+  let lastErr = null, lastStatus = null, succeededTier = -1;
+  for(let i=0; i<attempts.length; i++){
+    try{
+      const res = await fetch('/api/data', {
+        method:'POST',
+        headers:{'content-type':'application/json'},
+        body: JSON.stringify({ sectionId, result: attempts[i], ranBy })
+      });
+      if(res.ok){ succeededTier = i; break; }
+      lastStatus = res.status;
+      let data = null;
+      try{ data = await res.json(); } catch(e){}
+      lastErr = (data && data.error) ? data.error : `HTTP ${res.status}`;
+      if(res.status !== 413 && res.status !== 400) break; // only worth retrying smaller for size-related errors
+    } catch(err){
+      lastErr = err.message;
+      break; // network error, not a size problem — retrying smaller won't help
+    }
+  }
+
+  if(succeededTier === 0){
+    noteEl.textContent = ranBy
+      ? `Synced by ${ranBy} — anyone who logs in now sees this.`
+      : 'Synced — anyone who logs in now sees this.';
+  } else if(succeededTier > 0){
+    console.warn(`Full result for "${sectionId}" was too large to sync — synced a lighter version (tier ${succeededTier}) instead.`);
+    noteEl.textContent = ranBy
+      ? `Synced by ${ranBy} — full detail was too large, so exports may be incomplete until this is re-run with a smaller file.`
+      : 'Synced — full detail was too large, so exports may be incomplete until this is re-run with a smaller file.';
+  } else {
+    noteEl.innerHTML = `Saved on this device only — sync failed: ${escapeHtml(lastErr || 'unknown error')} <a href="#" data-retry="${sectionId}" style="color:var(--blue); font-weight:600;">Retry</a>`;
+    wireRetry(sectionId, result, ranBy);
+    console.error('Shared sync failed for', sectionId, lastStatus, lastErr);
+  }
+}
+
+function wireRetry(sectionId, result, ranBy){
+  const noteEl = document.getElementById('note-'+sectionId);
+  const link = noteEl.querySelector('[data-retry]');
+  if(link){
+    link.addEventListener('click', async (e)=>{
+      e.preventDefault();
+      noteEl.textContent = 'Retrying…';
+      await syncToShared(sectionId, result, ranBy);
+    });
+  }
+}
+
+// Reflect already-saved sections on page load
+SECTIONS.forEach(s=>{
+  const savedResult = loadSectionResult(s.id);
+  if(savedResult){
+    document.getElementById('pill-'+s.id).textContent = 'Compared ✓';
+    document.getElementById('pill-'+s.id).classList.add('ready');
+  }
+  // NOTE: Export Full Report still can't be wired up here even if a saved
+  // result exists — it needs the raw uploaded files (st), which only live
+  // in memory for the current session and are never persisted. The button
+  // must stay disabled until files are re-uploaded and compared again in
+  // this session; that's a real, separate limitation, not this bug.
+});
+
+// ===== Fulfillment Summary panel =====
+document.getElementById('fs-link-fulfillable').href = FULFILLMENT_SUMMARY.fulfillableOrdersUrl;
+document.getElementById('fs-link-nsfulfilled').href = FULFILLMENT_SUMMARY.netsuiteFulfilledUrl;
+document.getElementById('fs-link-avshipped').href = FULFILLMENT_SUMMARY.avectousShippedUrl;
+
+const fsState = { fulfillable:null, nsfulfilled:null, avshipped:null };
+
+function fsMaybeEnableRun(){
+  const btn = document.getElementById('fs-run');
+  const note = document.getElementById('note-fulfillment_summary');
+  if(fsState.fulfillable){
+    btn.disabled = false;
+    note.textContent = fsState.nsfulfilled && fsState.avshipped
+      ? 'Ready — all three files loaded.'
+      : 'Ready — Fulfilled in NetSuite/Avectous will show as unavailable without those files.';
+  } else {
+    btn.disabled = true;
+    note.textContent = 'Load the Fulfillable Orders file above to enable this.';
+  }
+}
+
+function fsParseCsv(file, side, statusEl){
+  Papa.parse(file, {
+    header:true, skipEmptyLines:true,
+    complete:(res)=>{
+      const rows = res.data;
+      const headers = res.meta.fields || Object.keys(rows[0]||{});
+      fsState[side] = {headers, rows};
+      statusEl.textContent = `${file.name} — ${rows.length.toLocaleString()} rows`;
+      statusEl.classList.add('ok');
+      fsMaybeEnableRun();
+    },
+    error:(err)=>{ statusEl.textContent = 'Error: '+err.message; }
+  });
+}
+
+function fsParseExcel(file, side, statusEl){
+  const reader = new FileReader();
+  reader.onload = (e)=>{
+    try{
+      const data = new Uint8Array(e.target.result);
+      const workbook = XLSX.read(data, {type:'array'});
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const rows = sheetToSmartRows(sheet);
+      const headers = rows.length ? Object.keys(rows[0]) : [];
+      fsState[side] = {headers, rows};
+      statusEl.textContent = `${file.name} — ${rows.length.toLocaleString()} rows`;
+      statusEl.classList.add('ok');
+      fsMaybeEnableRun();
+    } catch(err){
+      statusEl.textContent = 'Error reading Excel file: '+err.message;
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+document.querySelectorAll('[data-fs-side]').forEach(inp=>{
+  inp.addEventListener('change', (e)=>{
+    const side = e.target.getAttribute('data-fs-side');
+    const file = e.target.files[0];
+    if(!file) return;
+    const statusEl = document.getElementById('fs-status-'+side);
+    const ext = file.name.split('.').pop().toLowerCase();
+    if(ext === 'xlsx' || ext === 'xls'){
+      fsParseExcel(file, side, statusEl);
+    } else {
+      fsParseCsv(file, side, statusEl);
+    }
+  });
+});
+
+document.getElementById('fs-run').addEventListener('click', async ()=>{
+  const note = document.getElementById('note-fulfillment_summary');
+  try{
+    const dateFrom = document.getElementById('fs-date-from').value || null;
+    const dateTo = document.getElementById('fs-date-to').value || null;
+    const result = computeFulfillmentSummary(fsState.fulfillable, fsState.nsfulfilled, fsState.avshipped, dateFrom, dateTo);
+
+    let name = prompt('Who\u2019s running this comparison? (helps the team know who last ran it)', getLastUsedName());
+    if(name === null) name = ''; // cancelled — proceed anyway, just without a name
+    name = name.trim();
+    if(name) setLastUsedName(name);
+
+    try{
+      localStorage.setItem(STORAGE_PREFIX + 'fulfillment_summary', JSON.stringify(result));
+    } catch(storageErr){
+      // The slim per-order data can be sizable for large files — if it doesn't
+      // fit locally, drop it from the local copy only. The full version
+      // (including _slim) still syncs to the shared server either way, so
+      // Dashboard interactivity keeps working as long as that sync succeeds.
+      console.warn('Local storage too small for full result — saving without _slim locally:', storageErr.message);
+      const { _slim, ...withoutSlim } = result;
+      localStorage.setItem(STORAGE_PREFIX + 'fulfillment_summary', JSON.stringify(withoutSlim));
+    }
+    localStorage.setItem(STORAGE_PREFIX + 'fulfillment_summary_savedAt', new Date().toISOString());
+    if(name) localStorage.setItem(STORAGE_PREFIX + 'fulfillment_summary_ranBy', name);
+    document.getElementById('fs-pill').textContent = 'Compared ✓';
+    document.getElementById('fs-pill').classList.add('ready');
+    note.textContent = 'Saved locally — syncing…';
+    await syncToShared('fulfillment_summary', result, name || null);
+  } catch(err){
+    console.error('Fulfillment Summary compare failed:', err);
+    note.innerHTML = `<span style="color:var(--red); font-weight:600;">Something went wrong: ${escapeHtml(err.message)}</span>`;
+  }
+});
+
+if(localStorage.getItem(STORAGE_PREFIX + 'fulfillment_summary')){
+  document.getElementById('fs-pill').textContent = 'Compared ✓';
+  document.getElementById('fs-pill').classList.add('ready');
+}
+</script>
+</body>
+</html>
