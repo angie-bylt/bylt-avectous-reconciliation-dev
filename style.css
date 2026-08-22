@@ -328,3 +328,9 @@ tbody tr:nth-child(even){ background:#fbfcfd; }
 .os-headline .hv{ font-size:30px; font-weight:800; color:var(--navy); line-height:1.05; }
 .os-headline .hl{ font-size:12px; color:var(--muted); margin-top:3px; }
 .os-headline .hv.warn{ color:#b8730a; }
+
+/* Value labels above the per-day bars. The container must stay align-items:stretch —
+   flex-end collapses each column to content height and the percentage bar heights
+   then resolve against nothing. */
+.os-chart-col .bar-val{ font-size:9.5px; color:var(--muted); text-align:center; line-height:1.2; margin-bottom:3px; white-space:nowrap; }
+.os-chart-cols{ height:170px; }

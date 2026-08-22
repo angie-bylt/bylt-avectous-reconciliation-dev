@@ -246,10 +246,11 @@ function shortDay(iso){
   return isNaN(d.getTime()) ? iso : `${d.getMonth()+1}/${d.getDate()}`;
 }
 
-function sideCard(r, label){
+function sideCard(r, label, bn){
   if(!r) return `<div class="os-card"><h3>${label}</h3><div class="placeholder">Not loaded yet</div></div>`;
   if(r.error) return `<div class="os-card"><h3>${label}</h3><div class="os-note err">${escapeHtml(r.error)}</div></div>`;
   const pct = r.totalOrders ? (r.shipped / r.totalOrders) * 100 : 0;
+  const sla = r.sla && r.sla.count ? r.sla.median : null;
   return `
     <div class="os-card">
       <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -257,58 +258,12 @@ function sideCard(r, label){
         <span class="os-card-meta">${fmt(r.totalRows)} rows in file</span>
       </div>
       <div class="os-big">${fmt(r.totalOrders)}</div>
-      <div class="os-big-sub">distinct orders &middot; keyed on ${escapeHtml(r.keyColumn)}</div>
+      <div class="os-big-sub">distinct orders</div>
       <div class="os-row"><span class="lbl">Shipped</span><span class="num" style="color:var(--green);">${fmt(r.shipped)} <span style="color:var(--muted); font-weight:400;">(${pct.toFixed(1)}%)</span></span></div>
-      <div class="os-row"><span class="lbl">&nbsp;&nbsp;of which partial</span><span class="num" style="color:#b8730a;">${fmt(r.partial)}</span></div>
       <div class="os-row"><span class="lbl">Not shipped</span><span class="num" style="color:var(--red);">${fmt(r.notShipped)}</span></div>
+      ${sla !== null ? `<div class="os-row"><span class="lbl">Typical time to ship</span><span class="num">${sla} ${sla === 1 ? 'day' : 'days'}</span></div>` : ''}
+      ${bn ? `<div class="os-row"><span class="lbl">Waiting over ${bn.line} days</span><span class="num" style="color:#b8730a;">${fmt(bn.over)}</span></div>` : ''}
       ${r.unknown ? `<div class="os-row"><span class="lbl">Unrecognised status</span><span class="num">${fmt(r.unknown)}</span></div>` : ''}
-    </div>`;
-}
-
-function distBars(buckets, total, colour){
-  if(!buckets || !buckets.length) return '<div class="placeholder">No data.</div>';
-  const max = Math.max(...buckets.map(b=>b.count), 1);
-  return `<div class="os-dist">${buckets.map(b=>`
-    <div class="os-dist-row">
-      <span class="lab">${b.label}</span>
-      <div class="os-dist-track"><div class="os-dist-fill" style="width:${(b.count/max)*100}%; background:${colour};"></div></div>
-      <span class="val">${fmt(b.count)} <span style="color:var(--muted); font-weight:400; font-size:11px;">${total ? ((b.count/total)*100).toFixed(0) : 0}%</span></span>
-    </div>`).join('')}</div>`;
-}
-
-function pctBlock(s){
-  return `<div class="os-pcts">
-    <div class="os-pct"><div class="v">${s.median}</div><div class="l">Median</div></div>
-    <div class="os-pct"><div class="v">${s.p75}</div><div class="l">75th pct</div></div>
-    <div class="os-pct"><div class="v">${s.p90}</div><div class="l">90th pct</div></div>
-    <div class="os-pct"><div class="v">${s.worst}</div><div class="l">Longest</div></div>
-  </div>`;
-}
-
-function slaSection(r, label){
-  if(!r || r.error || !r.sla || !r.sla.count) return '';
-  const s = r.sla;
-  return `
-    <div class="os-section">
-      <h3>${label} &mdash; how long shipping takes</h3>
-      <div class="os-section-sub">Days from the order date to the day it shipped, across ${fmt(s.count)} shipped orders.</div>
-      ${pctBlock(s)}
-      ${distBars(s.buckets, s.count, '#1a7f37')}
-    </div>`;
-}
-
-function ageSection(r, bn, label){
-  if(!r || r.error || !r.age || !r.age.count) return '';
-  const a = r.age;
-  return `
-    <div class="os-section">
-      <h3>${label} &mdash; how long the queue has been waiting</h3>
-      <div class="os-section-sub">Days since the order was placed, for the ${fmt(a.count)} orders that have not shipped anything yet.</div>
-      <div class="os-headline">
-        <div><div class="hv">${a.median}</div><div class="hl">median days waiting</div></div>
-        ${bn ? `<div><div class="hv warn">${fmt(bn.over)}</div><div class="hl">waiting longer than ${bn.line} days &mdash; the point<br>by which 90% normally ship</div></div>` : ''}
-      </div>
-      ${distBars(a.buckets, a.count, '#c22a2a')}
     </div>`;
 }
 
@@ -325,7 +280,6 @@ function channelTable(r, label){
     return `<tr>
       <td class="os-chan-name">${escapeHtml(name === '- None -' ? 'Not set' : name)}</td>
       <td class="n" style="color:var(--green); font-weight:700;">${fmt(v.shipped)}</td>
-      <td class="n" style="color:#b8730a;">${fmt(v.partial)}</td>
       <td class="n" style="color:var(--red); font-weight:700;">${fmt(v.notShipped)}</td>
       <td class="n" style="color:var(--muted);">${fmt(v.total)}</td>
       <td class="n" style="font-weight:700;">${pct.toFixed(1)}%</td>
@@ -336,10 +290,10 @@ function channelTable(r, label){
       <h3>${label} by channel</h3>
       <div class="os-section-sub">Channel read from the <strong>${escapeHtml(r.channelColumn || 'n/a')}</strong> column &middot; each order counted once</div>
       <table class="os-chan-table">
-        <thead><tr><th>Channel</th><th class="n">Shipped</th><th class="n">of which partial</th><th class="n">Not shipped</th><th class="n">Total</th><th class="n">% shipped</th></tr></thead>
+        <thead><tr><th>Channel</th><th class="n">Shipped</th><th class="n">Not shipped</th><th class="n">Total</th><th class="n">% shipped</th></tr></thead>
         <tbody>${body}</tbody>
         <tfoot><tr>
-          <td>All channels</td><td class="n">${fmt(tot.shipped)}</td><td class="n">${fmt(tot.partial)}</td>
+          <td>All channels</td><td class="n">${fmt(tot.shipped)}</td>
           <td class="n">${fmt(tot.notShipped)}</td><td class="n">${fmt(tot.total)}</td>
           <td class="n">${tot.total ? ((tot.shipped/tot.total)*100).toFixed(1) : 0}%</td>
         </tr></tfoot>
@@ -353,7 +307,11 @@ function throughputChart(map, label, sub, days){
   if(!entries.length) return `<div class="os-section"><h3>${label}</h3><div class="placeholder">No fulfillment dates in this file.</div></div>`;
   const slice = entries.slice(-n);
   const max = Math.max(...slice.map(([,v])=>v), 1);
-  const cols = slice.map(([day,v])=>`<div class="os-chart-col" title="${day}: ${fmt(v)}"><div class="seg only" style="height:${Math.max((v/max)*100, v>0?2:0)}%;"></div></div>`).join('');
+  const cols = slice.map(([day,v])=>`
+    <div class="os-chart-col" title="${day}: ${fmt(v)}">
+      <div class="bar-val">${v > 0 ? fmt(v) : ''}</div>
+      <div class="seg only" style="height:${Math.max((v/max)*100, v>0?2:0)}%;"></div>
+    </div>`).join('');
   const axis = slice.map(([day])=>`<div>${shortDay(day)}</div>`).join('');
   const total = slice.reduce((a,[,v])=>a+v,0);
   const busiest = slice.reduce((a,b)=> b[1]>a[1]?b:a);
@@ -374,20 +332,11 @@ function notes(res){
     const r = res[side];
     if(!r || r.error) return;
     const label = side === 'so' ? 'Sales orders' : 'Transfer orders';
-    if(!r.reconciles){
-      out.push(`<div class="os-note err">${label}: the three states don't add up to the order count. Something is wrong with this file — don't trust these numbers.</div>`);
-    }
-    if(r.unrecognisedStatuses.length){
-      out.push(`<div class="os-note warn">${label}: found status values this tab doesn't recognise — ${escapeHtml(r.unrecognisedStatuses.join(', '))}. Those orders are counted in the total but not in any state.</div>`);
-    }
+    if(!r.reconciles) out.push(`<div class="os-note err">${label}: shipped plus not shipped doesn't equal the order count. Something is wrong with this file &mdash; don't trust these numbers.</div>`);
+    if(r.unrecognisedStatuses.length) out.push(`<div class="os-note warn">${label}: found status values this tab doesn't recognise &mdash; ${escapeHtml(r.unrecognisedStatuses.join(', '))}. Those orders are in the total but in no state.</div>`);
   });
-  const t = res.total;
-  if(t.totalRows > t.totalOrders){
-    out.push(`<div class="os-note info"><strong>${fmt(t.partial)} orders are partially shipped</strong>, so NetSuite lists each of them twice &mdash; once for the part that shipped, once for the part that hasn't. That's why the files contain ${fmt(t.totalRows)} rows for ${fmt(t.totalOrders)} orders. Every order above is counted once.</div>`);
-  }
   return out.join('');
 }
-
 
 // Builds an audit workbook: the numbers, the rules behind them, and every
 // order that makes up each figure. Anyone can rebuild the dashboard from this
@@ -527,22 +476,17 @@ function render(){
         <span style="width:${w[1]}%; background:#c22a2a;"></span>
       </div>
       <div class="os-legend">
-        <span><i style="background:#1a7f37;"></i>Shipped ${fmt(t.shipped)} &mdash; includes ${fmt(t.partial)} partial</span>
+        <span><i style="background:#1a7f37;"></i>Shipped ${fmt(t.shipped)}</span>
         <span><i style="background:#c22a2a;"></i>Not shipped ${fmt(t.notShipped)}</span>
       </div>
     </div>
 
     <div class="os-split">
-      ${sideCard(current.so, 'Sales orders')}
-      ${sideCard(current.to, 'Transfer orders')}
+      ${sideCard(current.so, 'Sales orders', current.beyondNormal && current.beyondNormal.so)}
+      ${sideCard(current.to, 'Transfer orders', current.beyondNormal && current.beyondNormal.to)}
     </div>
 
     ${notes(current)}
-
-    ${slaSection(current.so, 'Sales orders')}
-    ${ageSection(current.so, current.beyondNormal && current.beyondNormal.so, 'Sales orders')}
-    ${slaSection(current.to, 'Transfer orders')}
-    ${ageSection(current.to, current.beyondNormal && current.beyondNormal.to, 'Transfer orders')}
 
     ${channelTable(current.so, 'Sales orders')}
     ${channelTable(current.to, 'Transfer orders')}

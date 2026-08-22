@@ -1,4 +1,4 @@
-BYLT dashboard -- update 4
+BYLT dashboard -- update 5
 ==========================
 
 UPLOAD THESE 4 FILES to your GitHub repo, replacing the existing ones:
@@ -13,21 +13,42 @@ Then Netlify -> Deploys -> Trigger deploy.
 
 (Do NOT upload this START-HERE.txt.)
 
+This replaces updates 3 and 4. If you have not uploaded those
+yet, just use this one.
 
-WHAT CHANGED FROM UPDATE 3
---------------------------
-The "Show how this is counted" links are gone from the dashboard.
-It now reads as a finished report, not a worked example.
 
-The counting rules moved to two places instead:
+WHAT CHANGED
+------------
+REMOVED
+  - The "215 orders are partially shipped..." note.
+  - The two "how long shipping takes" panels.
+  - The two "how long the queue has been waiting" panels.
+  - The "of which partial" column from both channel tables.
+  - "Show how this is counted" links (removed in update 4).
 
-1. FOR YOU -- inside the collapsed "Update these numbers" panel
-   at the bottom of the tab. Open it and scroll past the file
-   pickers. Every rule is there, plus a live readout of which
-   columns were detected on the last run.
+ADDED TO THE CARDS INSTEAD
+  Two lines each, replacing four whole panels:
+    Typical time to ship    3 days
+    Waiting over 8 days     1,128
 
-2. FOR SHARING -- the Summary & Method sheet inside Export proof.
-   That is the version to hand to anyone who asks how a number
-   was arrived at.
+FIXED
+  The per-day charts now print the number above each bar.
 
-Nothing else changed. Same sections, same figures.
+NEW ORDER
+  1. Hero tiles
+  2. Sales orders / Transfer orders cards
+  3. Sales orders by channel
+  4. Transfer orders by channel
+  5. Sales orders shipped per day
+  6. Transfer orders shipped per day
+  7. Update these numbers (collapsed)
+
+
+WHERE THE DETAIL WENT
+---------------------
+Partial orders still exist -- 215 of them. They count as shipped
+and change no total, so they are off the page but kept as a
+filterable column in the Export proof ledger.
+
+The counting rules are inside the collapsed "Update these
+numbers" panel, and on the Summary & Method sheet of the export.

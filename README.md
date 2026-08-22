@@ -60,17 +60,25 @@ Do not reintroduce an order-date-based "how late are we" metric. Order date is
 the wrong clock: an EDI order placed in March with a ship date of 1 Aug is
 20 days late, not 164.
 
-### Sections on the tab
+### Sections on the tab, in order
 
-**How long shipping takes** — percentiles plus a distribution, per order type.
+1. Hero tiles — total, shipped, not shipped
+2. Sales orders card / Transfer orders card
+3. Sales orders by channel
+4. Transfer orders by channel
+5. Sales orders shipped per day
+6. Transfer orders shipped per day
+7. Update these numbers (collapsed)
 
-**How long the queue has been waiting** — aging of unshipped orders, with the
-count sitting beyond the 90th-percentile line.
+Ship time and queue age are reported as one line each on the cards —
+"typical time to ship" (median) and "waiting over N days", where N is the 90th
+percentile of actual ship time. Full percentile grids were tried and removed:
+four panels to answer two questions was too much for the audience.
 
-**By channel** — sales orders read channel from `Order Type`, transfer orders
-from `Channel`. The All channels row always matches the card above it.
-
-**Shipped per day** — orders counted on the day they finished shipping.
+Partial orders are not shown on the page at all. They count as shipped, they
+change no total, and calling them out on every table added a column nobody
+needed. The `Partial` field survives in the export ledger, so the detail is
+still auditable.
 
 ### Show your work
 
