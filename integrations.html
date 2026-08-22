@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>BYLT / Integrations Status</title>
+<link rel="stylesheet" href="style.css">
+<script src="auth-check.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">BYLT</div>
+  <nav>
+    <a href="index.html">Order Status</a>
+    <a href="integrations.html" class="current">Integrations Status</a>
+    <a href="integration-health.html">Integration Health</a>
+    <a href="load-data.html">Load Data</a>
+    <a href="totals.html">Totals</a>
+    <a href="#" id="logoutLink" style="margin-left:24px;">Log out</a>
+  </nav>
+</header>
+
+<div class="crumbline" style="display:flex; justify-content:space-between; align-items:flex-end; gap:16px; flex-wrap:wrap;">
+  <div>
+    <h1>Integrations Status</h1>
+    <div class="path" id="asOf">Loading&hellip;</div>
+  </div>
+  <div style="display:flex; gap:10px;">
+    <button class="ghost" id="exportBtn" style="display:none;">Export comparison &#8595;</button>
+    <button class="ghost" id="refreshBtn">Refresh</button>
+  </div>
+</div>
+
+<main>
+  <div id="results"></div>
+
+  <div class="os-toggle-panel">
+    <div class="os-toggle-head" id="uploadToggle">
+      <span class="tt">Update these numbers</span>
+      <span class="cx" id="uploadToggleLabel">Open &#9662;</span>
+    </div>
+    <div class="os-toggle-body" id="uploadBody">
+      <div class="sub" style="margin:14px 0;">
+        Four files: the two NetSuite searches you already use on Order Status, plus the two
+        Avectous exports. Avectous names both of its files <code>Orders(number).xlsx</code> &mdash;
+        they are different reports, so check you're loading the right one in each box.
+      </div>
+
+      <div class="upload-row">
+        <div class="upload-box">
+          <label>1 &middot; Sales Orders (NetSuite)</label>
+          <div style="font-size:11.5px; color:var(--muted); margin-bottom:7px;">
+            Search 4866 &middot; <a href="#" id="link-so" target="_blank" rel="noopener" style="color:var(--blue); font-weight:600;">Open &#8599;</a>
+          </div>
+          <input type="file" id="file-so" accept=".csv,.xls,.xlsx">
+          <div class="upload-status" id="status-so">No file loaded</div>
+        </div>
+        <div class="upload-box">
+          <label>2 &middot; Transfer Orders (NetSuite)</label>
+          <div style="font-size:11.5px; color:var(--muted); margin-bottom:7px;">
+            Search 4867 &middot; <a href="#" id="link-to" target="_blank" rel="noopener" style="color:var(--blue); font-weight:600;">Open &#8599;</a>
+          </div>
+          <input type="file" id="file-to" accept=".csv,.xls,.xlsx">
+          <div class="upload-status" id="status-to">No file loaded</div>
+        </div>
+      </div>
+
+      <div class="upload-row" style="margin-top:14px;">
+        <div class="upload-box">
+          <label>3 &middot; Avectous Orders</label>
+          <div style="font-size:11.5px; color:var(--muted); margin-bottom:7px;">
+            The order download &mdash; has a <code>Status</code> column
+          </div>
+          <input type="file" id="file-sync" accept=".csv,.xls,.xlsx">
+          <div class="upload-status" id="status-sync">No file loaded</div>
+        </div>
+        <div class="upload-box">
+          <label>4 &middot; Avectous Shipments</label>
+          <div style="font-size:11.5px; color:var(--muted); margin-bottom:7px;">
+            The shipments report &mdash; has a <code>LastShipDate</code> column
+          </div>
+          <input type="file" id="file-ship" accept=".csv,.xls,.xlsx">
+          <div class="upload-status" id="status-ship">No file loaded</div>
+        </div>
+      </div>
+
+      <div style="margin-top:22px; padding-top:16px; border-top:1px solid var(--border);">
+        <div style="font-size:12.5px; font-weight:700; color:var(--navy); margin-bottom:3px;">How these numbers are worked out</div>
+        <div style="font-size:11.5px; color:var(--muted); margin-bottom:11px;">
+          Internal reference. The same notes are on the Method sheet of the export.
+        </div>
+        <div class="os-method-body open" style="margin-top:0;">
+          <strong>Direction is different for the two halves, and it matters</strong>
+          <ol>
+            <li><strong>Order sync runs NetSuite &rarr; Avectous.</strong> NetSuite creates the order and the queue pushes it out, so the test is: of the orders NetSuite holds, how many reached Avectous?</li>
+            <li><strong>Fulfillment sync runs Avectous &rarr; NetSuite.</strong> The warehouse physically ships, then confirms back. So the test is the reverse: of the orders Avectous shipped, how many did NetSuite record?</li>
+          </ol>
+          <div style="margin-top:6px;">
+            Checking fulfillments the other way round &mdash; taking orders NetSuite already fulfilled and
+            asking whether Avectous agrees &mdash; reads about 99% and means nothing. An order NetSuite
+            never fulfilled can't appear in that sample, so every real failure is excluded by construction.
+          </div>
+
+          <strong style="display:block; margin-top:11px;">Matching</strong>
+          <ol>
+            <li>Sales orders match on <code>PO/Check Number</code> against Avectous <code>OrderNumber</code>.</li>
+            <li>Transfer orders match on <code>Document Number</code> against the same column.</li>
+            <li>Avectous puts sales and transfer orders in one export, so each NetSuite search is matched against the whole file rather than trusting <code>OrderType</code>.</li>
+          </ol>
+
+          <strong style="display:block; margin-top:11px;">The 15-minute queue window</strong>
+          <div style="margin-top:4px;">
+            Anything Avectous shipped on its most recent day is separated out as "shipped today" rather
+            than counted as a failure. Everything older has had far longer than one queue interval to
+            arrive, so it is reported as overdue.
+          </div>
+
+          <strong style="display:block; margin-top:11px;">Orders only Avectous has</strong>
+          <div style="margin-top:4px;">
+            Listed separately, never inside a health percentage. These are usually test orders or orders
+            created after the NetSuite export was pulled. They are in the export so you can check.
+          </div>
+        </div>
+      </div>
+
+      <div class="run-row" style="margin-top:18px;">
+        <input type="text" id="ranBy" placeholder="Your name (optional)"
+          style="padding:8px 11px; border:1px solid var(--border); border-radius:6px; font-size:13px; width:190px;">
+        <button class="primary" id="runBtn" disabled>Update Dashboard</button>
+        <span class="run-note" id="runNote">Load all four files to enable this.</span>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script src="app.js"></script>
+<script src="integrations-export.js"></script>
+<script>
+const files = { so:null, to:null, sync:null, ship:null };
+let current = null, savedAt = null, ranBy = null;
+
+document.getElementById('logoutLink').addEventListener('click', e=>{ e.preventDefault(); logout(); });
+document.getElementById('refreshBtn').addEventListener('click', ()=>init());
+document.getElementById('exportBtn').addEventListener('click', ()=>{
+  if(typeof window.exportComparison === 'function') window.exportComparison();
+});
+document.getElementById('link-so').href = INTEGRATIONS.sources.so.url;
+document.getElementById('link-to').href = INTEGRATIONS.sources.to.url;
+document.getElementById('ranBy').value = getLastUsedName();
+document.getElementById('uploadToggle').addEventListener('click', ()=>{
+  const open = document.getElementById('uploadBody').classList.toggle('open');
+  document.getElementById('uploadToggleLabel').innerHTML = open ? 'Close &#9652;' : 'Open &#9662;';
+});
+
+function smartRows(sheet){
+  const aoa = XLSX.utils.sheet_to_json(sheet, {header:1, defval:''});
+  if(!aoa.length) return {headers:[], rows:[]};
+  const filled = r => r.filter(c => c !== '' && c !== undefined && c !== null).length;
+  let hi = 0;
+  for(let i = 0; i < Math.min(5, aoa.length); i++){ if(filled(aoa[i]) > 1){ hi = i; break; } }
+  const headers = aoa[hi].map(h => String(h ?? '').trim());
+  const rows = [];
+  for(let i = hi + 1; i < aoa.length; i++){
+    if(filled(aoa[i]) === 0) continue;
+    const o = {};
+    headers.forEach((h, j)=>{ o[h] = aoa[i][j] !== undefined ? aoa[i][j] : ''; });
+    rows.push(o);
+  }
+  return {headers, rows};
+}
+
+function readFile(file, side, statusEl){
+  const reader = new FileReader();
+  reader.onload = e=>{
+    try{
+      const wb = XLSX.read(new Uint8Array(e.target.result), {type:'array', cellDates:true});
+      const parsed = smartRows(wb.Sheets[wb.SheetNames[0]]);
+      if(!parsed.rows.length) throw new Error('No data rows found.');
+      files[side] = parsed;
+      statusEl.textContent = `${file.name} — ${parsed.rows.length.toLocaleString()} rows`;
+      statusEl.classList.add('ok');
+    } catch(err){
+      files[side] = null;
+      statusEl.textContent = 'Could not read this file: ' + err.message;
+      statusEl.classList.remove('ok');
+    }
+    maybeEnable();
+  };
+  reader.onerror = ()=>{ statusEl.textContent = 'Could not read this file.'; };
+  reader.readAsArrayBuffer(file);
+}
+
+['so','to','sync','ship'].forEach(side=>{
+  document.getElementById('file-'+side).addEventListener('change', e=>{
+    const f = e.target.files[0];
+    if(f) readFile(f, side, document.getElementById('status-'+side));
+  });
+});
+
+function maybeEnable(){
+  const ready = files.so && files.to && files.sync && files.ship;
+  document.getElementById('runBtn').disabled = !ready;
+  document.getElementById('runNote').textContent = ready
+    ? 'Ready — press Update Dashboard.'
+    : 'Load all four files to enable this.';
+}
+
+document.getElementById('runBtn').addEventListener('click', async ()=>{
+  const btn = document.getElementById('runBtn');
+  const note = document.getElementById('runNote');
+  btn.disabled = true; note.textContent = 'Working…';
+  const name = document.getElementById('ranBy').value.trim();
+  if(name) setLastUsedName(name);
+
+  const result = computeIntegrations(files.so, files.to, files.sync, files.ship);
+  if(result.error){
+    note.textContent = result.error;
+    btn.disabled = false;
+    return;
+  }
+  const sync = await syncSectionToShared(INTEGRATIONS.id, result, name || null);
+  note.textContent = sync.ok
+    ? 'Updated — everyone signing in will see these numbers.'
+    : `Saved on this computer, but the shared copy failed: ${sync.error}`;
+  btn.disabled = false;
+  init();
+});
+
+const fmt = n => (n === null || n === undefined) ? '—' : Number(n).toLocaleString();
+
+function grade(h){ return h === null ? 'warn' : h >= 99 ? 'ok' : h >= 95 ? 'warn' : 'bad'; }
+
+function auditCard(a, isFulfil){
+  const cls = grade(a.health);
+  const totalLabel = isFulfil ? 'Shipped in Avectous' : 'Orders in NetSuite';
+  const matchLabel = isFulfil ? 'Recorded in NetSuite' : 'Reached Avectous';
+  return `
+    <div class="ig-card ${cls}">
+      <div class="stripe"></div>
+      <h3>${a.label}</h3>
+      <div class="ig-dir">${a.direction}</div>
+      <div class="ig-health">
+        <span class="n">${a.health === null ? '—' : a.health.toFixed(2) + '%'}</span>
+        <span class="lab">queue health</span>
+      </div>
+      <div class="ig-lines">
+        <div class="ig-line"><span class="k">${totalLabel}</span><span class="v">${fmt(a.total)}</span></div>
+        <div class="ig-line"><span class="k">${matchLabel}</span><span class="v">${fmt(a.matched)}</span></div>
+        <div class="ig-line"><span class="k">Missing</span><span class="v ${a.missing ? 'bad' : ''}">${fmt(a.missing)}</span></div>
+        ${isFulfil && a.missing ? `
+        <div class="ig-line"><span class="k">&nbsp;&nbsp;shipped today</span><span class="v warn">${fmt(a.sameDay)}</span></div>
+        <div class="ig-line"><span class="k">&nbsp;&nbsp;overdue</span><span class="v bad">${fmt(a.overdue)}</span></div>` : ''}
+      </div>
+      ${isFulfil && a.overdue > 0 ? `
+      <div class="ig-flag">
+        <strong>${fmt(a.overdue)} orders shipped on an earlier day and still have no fulfillment in NetSuite.</strong>
+        The queue runs every 15 minutes, so these have had far longer than one cycle to come through.
+      </div>` : ''}
+      ${!isFulfil && a.missing > 0 ? `
+      <div class="ig-flag mild">${fmt(a.missing)} orders exist in NetSuite but not in the Avectous download.</div>` : ''}
+    </div>`;
+}
+
+function render(){
+  const el = document.getElementById('results');
+  if(!current){
+    el.innerHTML = `<div class="panel"><div class="empty-state">No data yet — open "Update these numbers" below and load the four files.</div></div>`;
+    document.getElementById('exportBtn').style.display = 'none';
+    return;
+  }
+  document.getElementById('exportBtn').style.display = '';
+  const a = current.audits, c = current.counts;
+  const orphanTotal = current.orphans.sync.length + current.orphans.ship.length;
+
+  el.innerHTML = `
+    <div class="ig-src">
+      <div class="b"><div class="n">${fmt(c.nsSo)}</div><div class="l">Sales orders — NetSuite 4866</div></div>
+      <div class="b"><div class="n">${fmt(c.nsTo)}</div><div class="l">Transfer orders — NetSuite 4867</div></div>
+      <div class="b"><div class="n">${fmt(c.avSync)}</div><div class="l">Orders — Avectous</div></div>
+      <div class="b"><div class="n">${fmt(c.avShip)}</div><div class="l">Shipments — Avectous</div></div>
+    </div>
+
+    <div class="ig-grid">
+      ${auditCard(a.soSync, false)}
+      ${auditCard(a.toSync, false)}
+    </div>
+    <div class="ig-grid">
+      ${auditCard(a.soFulfil, true)}
+      ${auditCard(a.toFulfil, true)}
+    </div>
+
+    ${orphanTotal ? `
+    <div class="os-section">
+      <h3>In Avectous only</h3>
+      <div class="os-section-sub">
+        ${fmt(current.orphans.sync.length)} in the order download and ${fmt(current.orphans.ship.length)} in
+        shipments have no match in either NetSuite search. Usually test orders, or orders created after the
+        NetSuite export was pulled. Kept out of every percentage above, and listed in the export.
+      </div>
+    </div>` : ''}
+  `;
+}
+
+async function init(){
+  const shared = await loadSharedResults();
+  if(shared[INTEGRATIONS.id]){
+    current = shared[INTEGRATIONS.id].result;
+    savedAt = shared[INTEGRATIONS.id].savedAt;
+    ranBy   = shared[INTEGRATIONS.id].ranBy || null;
+  } else {
+    current = loadSectionResult(INTEGRATIONS.id);
+    savedAt = loadSectionSavedAt(INTEGRATIONS.id);
+    ranBy   = loadSectionRanBy(INTEGRATIONS.id);
+  }
+  document.getElementById('asOf').textContent = savedAt
+    ? `Last updated ${new Date(savedAt).toLocaleString()}${ranBy ? ' by ' + ranBy : ''}`
+    : 'No data loaded yet — load the four files below.';
+  render();
+}
+init();
+</script>
+</body>
+</html>

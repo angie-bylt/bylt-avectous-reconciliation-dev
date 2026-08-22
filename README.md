@@ -3,6 +3,7 @@
 Pages, one password gate:
 - login.html              -> Sign in (password gate for the whole site)
 - index.html              -> Order Status, 810 Texas DC — landing page / first tab
+- integrations.html       -> Integrations Status (NetSuite <-> Avectous queue audit)
 - integration-health.html -> Integration Health (was index.html: missing records + discrepancies)
 - load-data.html          -> Load Data (upload NetSuite + Avectous CSVs or XLSX, compare)
 - totals.html             -> Totals (just the summary numbers, one row per area)
@@ -93,6 +94,63 @@ kept in the shared copy; if the browser's local storage runs out it is the first
 thing dropped, and the export says so rather than exporting a partial file.
 
 The upload panel is collapsed by default. Click "Update these numbers" to open it.
+
+## Integrations Status tab
+
+Audits the two order queues between NetSuite and Avectous. Four files: the two
+NetSuite searches already used on Order Status, plus both Avectous exports.
+Avectous names both of its files `Orders(number).xlsx` — they are different
+reports, distinguished by their columns (`Status` on the order download,
+`LastShipDate` on shipments).
+
+### Direction is different for the two halves
+
+**Order sync runs NetSuite -> Avectous.** NetSuite creates the order and the
+queue pushes it out, so the test is: of the orders NetSuite holds, how many
+reached Avectous?
+
+**Fulfillment sync runs Avectous -> NetSuite.** The warehouse physically ships,
+then confirms back, so the test is the reverse: of the orders Avectous shipped,
+how many did NetSuite record?
+
+Getting this backwards is the trap. Scoping the fulfillment check to orders
+NetSuite already fulfilled and asking whether Avectous agrees reads 99.78% —
+and is meaningless, because an order NetSuite never fulfilled cannot appear in
+that sample. Every real failure is excluded by construction. Read the correct
+way round the same data gives 78.73%.
+
+Baseline from the 21 Aug 2026 exports:
+
+| Queue | Direction | Expected | Arrived | Missing | Health |
+|---|---|---|---|---|---|
+| Sales order sync | NS -> AV | 20,092 | 19,829 | 263 | 98.69% |
+| Transfer order sync | NS -> AV | 1,731 | 1,727 | 4 | 99.77% |
+| Sales order fulfillments | AV -> NS | 14,696 | 11,570 | 3,126 | 78.73% |
+| Transfer order fulfillments | AV -> NS | 409 | 204 | 205 | 49.88% |
+
+Outbound order sync is healthy. Ship confirmations coming back are not. Of the
+3,126 missing sales-order fulfillments, only 59 shipped on the latest Avectous
+day — 3,067 shipped earlier and have had far longer than the 15-minute queue
+interval. All sit at Pending Fulfillment in NetSuite with WMS Status also
+Pending Fulfillment, so NetSuite has no idea the warehouse touched them.
+Verified against `#55635919`, which has no Item Fulfillment in NetSuite.
+
+### Matching and exclusions
+
+Sales orders match on `PO/Check Number`, transfer orders on `Document Number`,
+both against Avectous `OrderNumber`. Avectous mixes both order types into one
+export, so each NetSuite search is matched against the whole file rather than
+trusting `OrderType`.
+
+Orders present only in Avectous (171 in the order download, 25 in shipments)
+are listed separately and never included in a health percentage — they are
+typically test orders or orders created after the NetSuite export was pulled.
+
+### The export
+
+**Export comparison** builds a workbook for two audiences: a Summary sheet for
+Chris, a Method sheet explaining the direction logic, and five detail sheets
+with one row per problem order, filterable, for sending to Avectous.
 
 ## How data works
 

@@ -1,9 +1,14 @@
-BYLT dashboard -- update 5
-==========================
+BYLT dashboard -- update 6: Integrations Status tab
+===================================================
 
-UPLOAD THESE 4 FILES to your GitHub repo, replacing the existing ones:
+UPLOAD THESE 9 FILES to your GitHub repo, replacing existing ones:
 
-    index.html
+    integrations.html          <- NEW
+    integrations-export.js     <- NEW
+    index.html                 (nav only)
+    integration-health.html    (nav only)
+    load-data.html             (nav only)
+    totals.html                (nav only)
     app.js
     style.css
     README.md
@@ -13,42 +18,61 @@ Then Netlify -> Deploys -> Trigger deploy.
 
 (Do NOT upload this START-HERE.txt.)
 
-This replaces updates 3 and 4. If you have not uploaded those
-yet, just use this one.
+This includes update 5, so if you have not uploaded that yet,
+this covers it.
 
 
-WHAT CHANGED
-------------
-REMOVED
-  - The "215 orders are partially shipped..." note.
-  - The two "how long shipping takes" panels.
-  - The two "how long the queue has been waiting" panels.
-  - The "of which partial" column from both channel tables.
-  - "Show how this is counted" links (removed in update 4).
+THE NEW TAB
+-----------
+Integrations Status. Four uploads:
+  1. NetSuite sales orders     (search 4866)
+  2. NetSuite transfer orders  (search 4867)
+  3. Avectous Orders           (the one with a Status column)
+  4. Avectous Shipments        (the one with LastShipDate)
 
-ADDED TO THE CARDS INSTEAD
-  Two lines each, replacing four whole panels:
-    Typical time to ship    3 days
-    Waiting over 8 days     1,128
-
-FIXED
-  The per-day charts now print the number above each bar.
-
-NEW ORDER
-  1. Hero tiles
-  2. Sales orders / Transfer orders cards
-  3. Sales orders by channel
-  4. Transfer orders by channel
-  5. Sales orders shipped per day
-  6. Transfer orders shipped per day
-  7. Update these numbers (collapsed)
+Four audit cards, colour-coded, then an "Export comparison"
+button that builds the workbook for Chris and Avectous.
 
 
-WHERE THE DETAIL WENT
----------------------
-Partial orders still exist -- 215 of them. They count as shipped
-and change no total, so they are off the page but kept as a
-filterable column in the Export proof ledger.
+WHAT IT FOUND
+-------------
+  Sales order sync            98.69%     263 missing
+  Transfer order sync         99.77%       4 missing
+  Sales order fulfillments    78.73%   3,126 missing
+  Transfer order fulfillments 49.88%     205 missing
 
-The counting rules are inside the collapsed "Update these
-numbers" panel, and on the Summary & Method sheet of the export.
+Orders going OUT to Avectous are fine.
+Ship confirmations coming BACK are not.
+
+Of the 3,126 missing sales-order fulfillments, only 59 shipped
+on the latest Avectous day. The other 3,067 shipped earlier and
+have had far longer than the 15-minute queue interval.
+
+
+WHY THE DIRECTION MATTERS
+-------------------------
+Order sync is measured NetSuite -> Avectous.
+Fulfillments are measured Avectous -> NetSuite.
+
+Measuring fulfillments the other way -- taking orders NetSuite
+already fulfilled and asking whether Avectous agrees -- gives
+99.78% and is meaningless. An order NetSuite never fulfilled
+cannot appear in that sample, so every real failure is excluded
+by construction.
+
+Same data, correct direction: 78.73%.
+
+
+THE EXPORT
+----------
+Seven sheets:
+  Summary                    for Chris
+  Method                     why the directions differ
+  SO Sync Missing            263 rows
+  TO Sync Missing              4 rows
+  SO Fulfillments Missing  3,126 rows  <- send to Avectous
+  TO Fulfillments Missing    205 rows  <- send to Avectous
+  In Avectous Only           196 rows  (test orders etc.)
+
+Every detail sheet is one row per order, filterable, with an
+Age column marking each as Today or Overdue.

@@ -1437,3 +1437,176 @@ async function syncSectionToShared(sectionId, result, ranBy){
     return { ok:false, error: err.message };
   }
 }
+
+/* ===========================================================
+   INTEGRATIONS STATUS
+   Audits the order queues between NetSuite and Avectous.
+
+   DIRECTION MATTERS, and it is different for the two halves:
+
+   - ORDER SYNC runs NetSuite -> Avectous. NetSuite creates the
+     order, the queue pushes it out. So the question is: of the
+     orders NetSuite has, how many reached Avectous?
+
+   - FULFILLMENT SYNC runs Avectous -> NetSuite. The warehouse
+     physically ships, then confirms back. So the question is the
+     reverse: of the orders Avectous shipped, how many did
+     NetSuite record?
+
+   Scoping the fulfillment check to orders NetSuite already
+   fulfilled reads ~99% and is meaningless — an order NetSuite
+   never fulfilled cannot appear in that sample, so every real
+   failure is excluded by construction.
+
+   Avectous puts sales orders and transfer orders in one export,
+   so each NetSuite search is matched against the whole file
+   rather than trusting the OrderType column.
+=========================================================== */
+const INTEGRATIONS = {
+  id:'integrations',
+  queueMinutes:15,
+  sources:{
+    so:{ label:'Fulfillable Sales Orders', search:'4866',
+         url:'https://11170298.app.netsuite.com/app/common/search/savedsearchresults.nl?searchid=4866&saverun=T&whence=',
+         keyField:['PO/Check Number'], hint:'BYLTFulfillableSalesOrdersResults' },
+    to:{ label:'Fulfillable Transfer Orders', search:'4867',
+         url:'https://11170298.app.netsuite.com/app/common/search/savedsearchresults.nl?searchid=4867&saverun=T&whence=',
+         keyField:['Document Number'], hint:'BYLTFulfillableTransferOrdersResults' },
+    sync:{ label:'Avectous Orders', hint:'Orders(...).xlsx — the order download',
+           keyField:['OrderNumber'] },
+    ship:{ label:'Avectous Shipments', hint:'Orders(...).xlsx — the shipments report',
+           keyField:['OrderNumber'], dateField:['LastShipDate'] }
+  }
+};
+
+// Collapses a NetSuite export to one entry per order.
+function nsOrderIndex(data, keyField){
+  const keyCol = guessColumn(data.headers, keyField);
+  const idCol  = guessColumn(data.headers, ['Internal ID']);
+  const stCol  = guessColumn(data.headers, ['Fulfillment Status']);
+  const dtCol  = guessColumn(data.headers, ['Date']);
+  const statusCol = guessColumn(data.headers, ['Status']);
+  const wmsCol = guessColumn(data.headers, ['WMS Status']);
+  const typeCol = guessColumn(data.headers, ['Order Type']);
+  if(!keyCol || !stCol) return { error:`Could not find the columns needed. Looked for "${[].concat(keyField).join('" or "')}" and "Fulfillment Status". Found: ${data.headers.join(', ')}` };
+
+  const byKey = new Map();
+  data.rows.forEach(row=>{
+    const k = String(row[keyCol] ?? '').trim();
+    if(!k) return;
+    let o = byKey.get(k);
+    if(!o){
+      o = { key:k, id: idCol ? String(row[idCol] ?? '').trim() : '', fulfilled:false,
+            orderDay: dtCol ? isoDay(row[dtCol]) : null,
+            status: statusCol ? String(row[statusCol] ?? '').trim() : '',
+            wms: wmsCol ? String(row[wmsCol] ?? '').trim() : '',
+            type: typeCol ? String(row[typeCol] ?? '').trim() : '' };
+      byKey.set(k, o);
+    }
+    if(norm(row[stCol]) === norm('Fulfilled')) o.fulfilled = true;
+  });
+  return { byKey, keyColumn:keyCol };
+}
+
+// Collapses an Avectous export to one entry per order number.
+function avOrderIndex(data, cfg){
+  const keyCol = guessColumn(data.headers, cfg.keyField);
+  const dateCol = cfg.dateField ? guessColumn(data.headers, cfg.dateField) : null;
+  const typeCol = guessColumn(data.headers, ['OrderType']);
+  const statCol = guessColumn(data.headers, ['Status']);
+  const chanCol = guessColumn(data.headers, ['Channel']);
+  if(!keyCol) return { error:`Could not find an "${[].concat(cfg.keyField).join('" or "')}" column. Found: ${data.headers.join(', ')}` };
+
+  const byKey = new Map();
+  data.rows.forEach(row=>{
+    const k = String(row[keyCol] ?? '').trim();
+    if(!k) return;
+    const day = dateCol ? isoDay(row[dateCol]) : null;
+    let o = byKey.get(k);
+    if(!o){
+      o = { key:k, day,
+            type: typeCol ? String(row[typeCol] ?? '').trim() : '',
+            status: statCol ? String(row[statCol] ?? '').trim() : '',
+            channel: chanCol ? String(row[chanCol] ?? '').trim() : '' };
+      byKey.set(k, o);
+    } else if(day && (!o.day || day > o.day)){
+      o.day = day;
+    }
+  });
+  return { byKey, keyColumn:keyCol, latestDay: [...byKey.values()].reduce((a,o)=> (o.day && (!a || o.day > a)) ? o.day : a, null) };
+}
+
+function pctOf(part, whole){ return whole > 0 ? (part / whole) * 100 : null; }
+
+function computeIntegrations(soData, toData, syncData, shipData){
+  const ns = {
+    so: soData ? nsOrderIndex(soData, INTEGRATIONS.sources.so.keyField) : null,
+    to: toData ? nsOrderIndex(toData, INTEGRATIONS.sources.to.keyField) : null
+  };
+  const av = {
+    sync: syncData ? avOrderIndex(syncData, INTEGRATIONS.sources.sync) : null,
+    ship: shipData ? avOrderIndex(shipData, INTEGRATIONS.sources.ship) : null
+  };
+  const err = [ns.so, ns.to, av.sync, av.ship].find(x => x && x.error);
+  if(err) return { error: err.error };
+  if(!ns.so || !ns.to || !av.sync || !av.ship) return { error:'All four files are needed.' };
+
+  const today = av.ship.latestDay || isoToday();
+
+  // NetSuite -> Avectous. Every order NetSuite holds should be in the download.
+  function syncAudit(nsSide, label){
+    const missing = [];
+    let matched = 0;
+    nsSide.byKey.forEach(o=>{
+      if(av.sync.byKey.has(o.key)) matched++;
+      else missing.push([o.key, o.id, o.orderDay || '', o.type, o.status, o.wms]);
+    });
+    const total = nsSide.byKey.size;
+    missing.sort((a,b)=> String(a[2]).localeCompare(String(b[2])));
+    return { label, direction:'NetSuite \u2192 Avectous', total, matched,
+             missing: missing.length, health: pctOf(matched, total), rows: missing };
+  }
+
+  // Avectous -> NetSuite. Every order Avectous shipped should have a
+  // fulfillment in NetSuite. Anything shipped before today has had far
+  // longer than the queue interval to arrive.
+  function fulfilAudit(nsSide, label){
+    const missing = [];
+    let shipped = 0, recorded = 0, sameDay = 0;
+    nsSide.byKey.forEach(o=>{
+      const a = av.ship.byKey.get(o.key);
+      if(!a) return;
+      shipped++;
+      if(o.fulfilled){ recorded++; return; }
+      const isToday = a.day && a.day >= today;
+      if(isToday) sameDay++;
+      missing.push([o.key, o.id, a.day || '', o.orderDay || '', o.status, o.wms, isToday ? 'Today' : 'Overdue']);
+    });
+    missing.sort((a,b)=> String(a[2]).localeCompare(String(b[2])));
+    return { label, direction:'Avectous \u2192 NetSuite', total: shipped, matched: recorded,
+             missing: missing.length, overdue: missing.length - sameDay, sameDay,
+             health: pctOf(recorded, shipped), rows: missing };
+  }
+
+  // Anything Avectous holds that neither NetSuite search knows about.
+  const nsKeys = new Set([...ns.so.byKey.keys(), ...ns.to.byKey.keys()]);
+  const orphans = { sync: [], ship: [] };
+  av.sync.byKey.forEach(o=>{ if(!nsKeys.has(o.key)) orphans.sync.push([o.key, o.day || '', o.type, o.status, o.channel]); });
+  av.ship.byKey.forEach(o=>{ if(!nsKeys.has(o.key)) orphans.ship.push([o.key, o.day || '', o.type, o.status, o.channel]); });
+
+  return {
+    computedAt: new Date().toISOString(),
+    avectousThrough: today,
+    audits:{
+      soSync:   syncAudit(ns.so, 'Sales order sync'),
+      toSync:   syncAudit(ns.to, 'Transfer order sync'),
+      soFulfil: fulfilAudit(ns.so, 'Sales order fulfillments'),
+      toFulfil: fulfilAudit(ns.to, 'Transfer order fulfillments')
+    },
+    orphans,
+    counts:{
+      nsSo: ns.so.byKey.size, nsTo: ns.to.byKey.size,
+      avSync: av.sync.byKey.size, avShip: av.ship.byKey.size
+    }
+  };
+}

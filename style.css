@@ -334,3 +334,33 @@ tbody tr:nth-child(even){ background:#fbfcfd; }
    then resolve against nothing. */
 .os-chart-col .bar-val{ font-size:9.5px; color:var(--muted); text-align:center; line-height:1.2; margin-bottom:3px; white-space:nowrap; }
 .os-chart-cols{ height:170px; }
+
+/* Integrations Status tab */
+.ig-grid{ display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:18px; }
+@media (max-width:900px){ .ig-grid{ grid-template-columns:1fr; } }
+.ig-card{ background:var(--card); border:1px solid var(--border); border-radius:12px; padding:18px 20px; position:relative; overflow:hidden; }
+.ig-card .stripe{ position:absolute; top:0; left:0; width:5px; height:100%; }
+.ig-card.ok .stripe{ background:var(--green); }
+.ig-card.warn .stripe{ background:#c98a1a; }
+.ig-card.bad .stripe{ background:var(--red); }
+.ig-card h3{ margin:0 0 1px; font-size:15px; padding-left:8px; }
+.ig-dir{ font-size:11px; color:var(--muted); padding-left:8px; margin-bottom:12px; letter-spacing:0.2px; }
+.ig-health{ display:flex; align-items:baseline; gap:9px; padding-left:8px; }
+.ig-health .n{ font-size:34px; font-weight:800; line-height:1; }
+.ig-card.ok .ig-health .n{ color:var(--green); }
+.ig-card.warn .ig-health .n{ color:#c98a1a; }
+.ig-card.bad .ig-health .n{ color:var(--red); }
+.ig-health .lab{ font-size:12px; color:var(--muted); }
+.ig-lines{ margin-top:13px; padding-left:8px; }
+.ig-line{ display:flex; justify-content:space-between; font-size:12.5px; padding:6px 0; border-top:1px solid var(--border); }
+.ig-line .k{ color:var(--muted); }
+.ig-line .v{ font-weight:700; }
+.ig-line .v.bad{ color:var(--red); }
+.ig-line .v.warn{ color:#b8730a; }
+.ig-flag{ margin-top:11px; margin-left:8px; background:var(--red-bg); border:1px solid #f3c6c6; border-radius:7px; padding:9px 11px; font-size:12px; color:#8a1f1f; line-height:1.55; }
+.ig-flag.mild{ background:#fdf6ec; border-color:#f0dcbb; color:#7a4d06; }
+.ig-src{ display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:18px; }
+@media (max-width:900px){ .ig-src{ grid-template-columns:1fr 1fr; } }
+.ig-src .b{ background:var(--card); border:1px solid var(--border); border-radius:10px; padding:12px 14px; }
+.ig-src .b .n{ font-size:19px; font-weight:800; color:var(--navy); }
+.ig-src .b .l{ font-size:11px; color:var(--muted); margin-top:2px; }
