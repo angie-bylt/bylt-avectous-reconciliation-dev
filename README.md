@@ -1,11 +1,56 @@
 # BYLT NetSuite–Avectous Reconciliation Site
 
-Three pages, one password gate:
-- login.html      -> Sign in (password gate for the whole site)
-- index.html      -> Dashboard (full detail: missing records + discrepancies) — landing page / first tab
-- load-data.html  -> Load Data (upload NetSuite + Avectous CSVs or XLSX, compare)
-- totals.html     -> Totals (just the summary numbers, one row per area)
-- dashboard.html  -> redirects to index.html, in case anyone bookmarked the old link
+Pages, one password gate:
+- login.html              -> Sign in (password gate for the whole site)
+- index.html              -> Order Status, 810 Texas DC — landing page / first tab
+- integration-health.html -> Integration Health (was index.html: missing records + discrepancies)
+- load-data.html          -> Load Data (upload NetSuite + Avectous CSVs or XLSX, compare)
+- totals.html             -> Totals (just the summary numbers, one row per area)
+- dashboard.html          -> redirects to integration-health.html for old bookmarks
+
+## Order Status tab
+
+Two NetSuite exports, uploaded on the tab itself (not on Load Data):
+- Search 4866, `customsearch_fulfillable_orders_final` -> fulfillable sales orders
+- Search 4867, `customsearchfulfillable_to_final`      -> fulfillable transfer orders
+
+Two counting rules, both of which the original spec got wrong:
+
+**Count distinct orders, not rows.** These searches return one row per
+fulfillment status per order. A partially shipped order therefore produces
+two rows — one "Fulfilled", one "Unfulfilled" — and counting rows puts that
+single order in both the fulfilled and the unfulfilled bucket. On the
+21 Aug 2026 files this inflated the total by 215 orders.
+
+**Key on Internal ID, not PO/Check Number.** Replacement orders inherit the
+original order's Shopify number, so PO/Check Number is not unique. It
+undercounted sales orders by 14.
+
+Hence three states rather than two. An order is Fully shipped only if every
+row says Fulfilled, Not started only if every row says Unfulfilled, and
+Partial if it has both. The three always sum to the order count — the tab
+shows a red warning if they ever don't, rather than displaying wrong numbers
+silently.
+
+Baseline from the 21 Aug 2026 exports:
+
+| | Total | Fully shipped | Partial | Not started |
+|---|---|---|---|---|
+| 810 Texas DC | 21,693 | 11,589 | 215 | 9,889 |
+| Sales orders | 19,962 | 11,589 | 7 | 8,366 |
+| Transfer orders | 1,731 | 0 | 208 | 1,523 |
+
+Note that zero transfer orders are completely fulfilled — all 208 with any
+fulfillment are partial. Worth investigating separately from this dashboard.
+
+Column detection is by header name, never column letter, since the saved
+search column order can change. The tab shows which column it keyed on so a
+wrong guess is visible.
+
+**Overlap worth resolving:** the Integration Health scorecard still carries a
+fulfillment widget built on search 4854, which defines "fulfillable" more
+loosely (any status except Closed and Pending Approval). It will report a
+different shipped count than this tab. Decide which one is authoritative.
 
 ## How data works
 

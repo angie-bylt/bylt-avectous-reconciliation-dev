@@ -2,931 +2,280 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>BYLT / NetSuite–Avectous Integration Health</title>
+<title>BYLT / Order Status — 810 Texas DC</title>
 <link rel="stylesheet" href="style.css">
 <script src="auth-check.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
 </head>
 <body>
 
 <header class="topbar">
   <div class="brand">BYLT</div>
   <nav>
-    <a href="index.html" class="current">Dashboard</a>
+    <a href="index.html" class="current">Order Status</a>
+    <a href="integration-health.html">Integration Health</a>
     <a href="load-data.html">Load Data</a>
     <a href="totals.html">Totals</a>
     <a href="#" id="logoutLink" style="margin-left:24px;">Log out</a>
   </nav>
 </header>
+
 <div class="crumbline" style="display:flex; justify-content:space-between; align-items:flex-end; gap:16px; flex-wrap:wrap;">
   <div>
-    <h1>BYLT / NetSuite / Avectous Integration Health</h1>
+    <h1>Order Status — 810 Texas DC</h1>
     <div class="path" id="asOf">Loading…</div>
   </div>
-  <div style="display:flex; align-items:center; gap:12px;">
-    <div class="view-switcher" id="viewSwitcher">
-      <button data-view="scorecard">Scorecard</button>
-      <button data-view="table">Table</button>
-      <button data-view="detailed">Detailed</button>
-    </div>
-    <button class="ghost" id="exportExcelBtn" style="display:none;">Export to Excel ↓</button>
-    <button class="ghost" id="exportWordBtn" style="display:none;">Export to Word ↓</button>
-    <button class="ghost" id="refreshBtn">Refresh</button>
-  </div>
+  <button class="ghost" id="refreshBtn">Refresh</button>
 </div>
 
 <main>
-  <div id="dashboard-grid"></div>
+  <div id="results"></div>
+
+  <div class="panel">
+    <h2>Update these numbers</h2>
+    <div class="sub">
+      Export both saved searches from NetSuite, drop the files here, then press Update.
+      Everyone who signs in sees the result — they don't need to load anything.
+    </div>
+
+    <div class="upload-row">
+      <div class="upload-box">
+        <label>Fulfillable Sales Orders</label>
+        <div style="font-size:11.5px; color:var(--muted); margin-bottom:7px;">
+          Search 4866 ·
+          <a href="#" id="link-so" target="_blank" rel="noopener" style="color:var(--blue); font-weight:600;">Open in NetSuite ↗</a>
+        </div>
+        <input type="file" id="file-so" accept=".csv,.xls,.xlsx">
+        <div class="upload-status" id="status-so">No file loaded</div>
+      </div>
+      <div class="upload-box">
+        <label>Fulfillable Transfer Orders</label>
+        <div style="font-size:11.5px; color:var(--muted); margin-bottom:7px;">
+          Search 4867 ·
+          <a href="#" id="link-to" target="_blank" rel="noopener" style="color:var(--blue); font-weight:600;">Open in NetSuite ↗</a>
+        </div>
+        <input type="file" id="file-to" accept=".csv,.xls,.xlsx">
+        <div class="upload-status" id="status-to">No file loaded</div>
+      </div>
+    </div>
+
+    <div class="run-row">
+      <input type="text" id="ranBy" placeholder="Your name (optional)"
+        style="padding:8px 11px; border:1px solid var(--border); border-radius:6px; font-size:13px; width:190px;">
+      <button class="primary" id="runBtn" disabled>Update Dashboard</button>
+      <span class="run-note" id="runNote">Load both files to enable this.</span>
+    </div>
+  </div>
 </main>
 
 <script src="app.js"></script>
 <script>
-const grid = document.getElementById('dashboard-grid');
-let latest = null;
-let lastSectionsWithResults = [];
-let fulfillmentSummaryResult = null;
-let fulfillmentSummarySavedAt = null;
-let fulfillmentSummarySlim = null;
-let fulfillmentSummaryRanBy = null;
-let auditorNotes = {};
-let currentView = localStorage.getItem('dashboardViewMode') || 'scorecard';
-if(currentView === 'cards') currentView = 'detailed'; // Cards view removed
+const files = { so:null, to:null };
+let current = null, savedAt = null, ranBy = null;
 
-document.getElementById('logoutLink').addEventListener('click', (e)=>{ e.preventDefault(); logout(); });
+document.getElementById('logoutLink').addEventListener('click', e=>{ e.preventDefault(); logout(); });
 document.getElementById('refreshBtn').addEventListener('click', ()=>init());
-document.getElementById('exportExcelBtn').addEventListener('click', exportScorecardToExcel);
-document.getElementById('exportWordBtn').addEventListener('click', exportScorecardToWord);
+document.getElementById('link-so').href = ORDER_STATUS.so.url;
+document.getElementById('link-to').href = ORDER_STATUS.to.url;
+document.getElementById('ranBy').value = getLastUsedName();
 
-document.querySelectorAll('#viewSwitcher button').forEach(btn=>{
-  btn.addEventListener('click', ()=>{
-    currentView = btn.getAttribute('data-view');
-    localStorage.setItem('dashboardViewMode', currentView);
-    updateSwitcherActiveState();
-    render();
+/* ---------- file reading ---------- */
+
+// NetSuite's ".xls" exports are actually SpreadsheetML (XML), which is why
+// the file is handed to SheetJS as an array rather than parsed as CSV.
+function smartRows(sheet){
+  const aoa = XLSX.utils.sheet_to_json(sheet, {header:1, defval:''});
+  if(!aoa.length) return {headers:[], rows:[]};
+  const filled = r => r.filter(c => c !== '' && c !== undefined && c !== null).length;
+  let hi = 0;
+  for(let i = 0; i < Math.min(5, aoa.length); i++){ if(filled(aoa[i]) > 1){ hi = i; break; } }
+  const headers = aoa[hi].map(h => String(h ?? '').trim());
+  const rows = [];
+  for(let i = hi + 1; i < aoa.length; i++){
+    if(filled(aoa[i]) === 0) continue;
+    const o = {};
+    headers.forEach((h, j)=>{ o[h] = aoa[i][j] !== undefined ? aoa[i][j] : ''; });
+    rows.push(o);
+  }
+  return {headers, rows};
+}
+
+function readFile(file, side, statusEl){
+  const reader = new FileReader();
+  reader.onload = e=>{
+    try{
+      const wb = XLSX.read(new Uint8Array(e.target.result), {type:'array'});
+      const parsed = smartRows(wb.Sheets[wb.SheetNames[0]]);
+      if(!parsed.rows.length) throw new Error('No data rows found in this file.');
+      files[side] = parsed;
+      statusEl.textContent = `${file.name} — ${parsed.rows.length.toLocaleString()} rows`;
+      statusEl.classList.add('ok');
+    } catch(err){
+      files[side] = null;
+      statusEl.textContent = 'Could not read this file: ' + err.message;
+      statusEl.classList.remove('ok');
+    }
+    maybeEnable();
+  };
+  reader.onerror = ()=>{ statusEl.textContent = 'Could not read this file.'; };
+  reader.readAsArrayBuffer(file);
+}
+
+['so','to'].forEach(side=>{
+  document.getElementById('file-'+side).addEventListener('change', e=>{
+    const f = e.target.files[0];
+    if(f) readFile(f, side, document.getElementById('status-'+side));
   });
 });
-function updateSwitcherActiveState(){
-  document.querySelectorAll('#viewSwitcher button').forEach(b=>{
-    b.classList.toggle('active', b.getAttribute('data-view') === currentView);
-  });
-  document.getElementById('exportExcelBtn').style.display = currentView === 'scorecard' ? '' : 'none';
-  document.getElementById('exportWordBtn').style.display = currentView === 'scorecard' ? '' : 'none';
-}
-updateSwitcherActiveState();
 
-async function init(){
-  latest = null;
-  const shared = await loadSharedResults();
-
-  auditorNotes = {};
-  SECTIONS.forEach(s=>{
-    const key = s.id + '_auditor_note';
-    if(shared[key] && shared[key].result){
-      auditorNotes[s.id] = shared[key].result;
-    } else {
-      const local = localStorage.getItem(STORAGE_PREFIX + key);
-      if(local) auditorNotes[s.id] = local;
-    }
-  });
-
-  let fsResult = null, fsSavedAt = null;
-  let fsRanBy = null;
-  if(shared['fulfillment_summary']){
-    fsResult = shared['fulfillment_summary'].result;
-    fsSavedAt = shared['fulfillment_summary'].savedAt;
-    fsRanBy = shared['fulfillment_summary'].ranBy || null;
-  } else {
-    const raw = localStorage.getItem(STORAGE_PREFIX + 'fulfillment_summary');
-    if(raw){
-      fsResult = JSON.parse(raw);
-      fsSavedAt = localStorage.getItem(STORAGE_PREFIX + 'fulfillment_summary_savedAt');
-      fsRanBy = localStorage.getItem(STORAGE_PREFIX + 'fulfillment_summary_ranBy');
-    }
-  }
-  fulfillmentSummaryResult = fsResult;
-  fulfillmentSummarySlim = fsResult ? fsResult._slim || null : null;
-  fulfillmentSummaryRanBy = fsRanBy;
-  fulfillmentSummarySavedAt = fsSavedAt;
-  fulfillmentSummarySavedAt = fsSavedAt;
-
-  lastSectionsWithResults = SECTIONS.map(s=>{
-    let result = null, savedAt = null, ranBy = null;
-    if(shared[s.id]){
-      result = shared[s.id].result;
-      savedAt = shared[s.id].savedAt;
-      ranBy = shared[s.id].ranBy || null;
-    } else {
-      result = loadSectionResult(s.id);
-      savedAt = loadSectionSavedAt(s.id);
-      ranBy = loadSectionRanBy(s.id);
-    }
-    if(savedAt && (!latest || savedAt > latest)) latest = savedAt;
-    return { s, result, savedAt, ranBy };
-  });
-
-  document.getElementById('asOf').textContent = latest
-    ? `Last updated ${new Date(latest).toLocaleString()}`
-    : `No data loaded yet — go to Load Data to get started.`;
-
-  render();
+function maybeEnable(){
+  const ready = files.so && files.to;
+  document.getElementById('runBtn').disabled = !ready;
+  document.getElementById('runNote').textContent = ready
+    ? 'Ready — press Update Dashboard.'
+    : 'Load both files to enable this.';
 }
 
-async function saveAuditorNote(sectionId, text){
-  const key = sectionId + '_auditor_note';
-  auditorNotes[sectionId] = text;
-  localStorage.setItem(STORAGE_PREFIX + key, text);
-  try{
-    await fetch('/api/data', {
-      method:'POST',
-      headers:{'content-type':'application/json'},
-      body: JSON.stringify({ sectionId: key, result: text, ranBy: null })
-    });
-  } catch(err){
-    console.warn('Auditor note saved locally but failed to sync:', err.message);
-  }
+document.getElementById('runBtn').addEventListener('click', async ()=>{
+  const btn = document.getElementById('runBtn');
+  const note = document.getElementById('runNote');
+  btn.disabled = true;
+  note.textContent = 'Working…';
+
+  const name = document.getElementById('ranBy').value.trim();
+  if(name) setLastUsedName(name);
+
+  const result = computeOrderStatus(files.so, files.to);
+  const sync = await syncSectionToShared(ORDER_STATUS.id, result, name || null);
+
+  note.textContent = sync.ok
+    ? 'Updated — everyone signing in will see these numbers.'
+    : `Saved on this computer, but the shared copy failed: ${sync.error}`;
+  btn.disabled = false;
+  init();
+});
+
+/* ---------- rendering ---------- */
+
+const fmt = n => (n === null || n === undefined) ? '—' : Number(n).toLocaleString();
+
+function pct(part, whole){ return whole > 0 ? (part / whole) * 100 : 0; }
+
+function sideCard(cfg, r, label){
+  if(!r) return `
+    <div class="os-card">
+      <h3>${label}</h3>
+      <div class="placeholder">Not loaded yet</div>
+    </div>`;
+  if(r.error) return `
+    <div class="os-card">
+      <h3>${label}</h3>
+      <div class="os-note err">${escapeHtml(r.error)}</div>
+    </div>`;
+  return `
+    <div class="os-card">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <h3>${label}</h3>
+        <span class="os-card-meta">${fmt(r.totalRows)} rows in file</span>
+      </div>
+      <div class="os-big">${fmt(r.totalOrders)}</div>
+      <div class="os-big-sub">distinct orders &middot; keyed on ${escapeHtml(r.keyColumn)}</div>
+      <div class="os-row"><span class="lbl">Fully shipped</span><span class="num" style="color:var(--green);">${fmt(r.fully)}</span></div>
+      <div class="os-row"><span class="lbl">Partially shipped</span><span class="num" style="color:#b8730a;">${fmt(r.partial)}</span></div>
+      <div class="os-row"><span class="lbl">Not started</span><span class="num" style="color:var(--red);">${fmt(r.notStarted)}</span></div>
+      ${r.unknown ? `<div class="os-row"><span class="lbl">Unrecognised status</span><span class="num">${fmt(r.unknown)}</span></div>` : ''}
+    </div>`;
 }
 
-function wireFulfillmentDateFilter(){
-  const fromInput = document.getElementById('fsFilterFrom');
-  const toInput = document.getElementById('fsFilterTo');
-  const clearBtn = document.getElementById('fsFilterClear');
-  if(!fromInput || !toInput) return; // panel not present (no data loaded yet)
-
-  function applyFilter(){
-    if(!fulfillmentSummarySlim){
-      // No slim data available (e.g. an older saved result, or local storage
-      // dropped it for size reasons) — the date inputs exist but can't
-      // recompute live. Fall back to re-running the comparison on Load Data.
-      return;
+function notes(res){
+  const out = [];
+  ['so','to'].forEach(side=>{
+    const r = res[side];
+    if(!r || r.error) return;
+    const label = side === 'so' ? 'Sales orders' : 'Transfer orders';
+    if(!r.reconciles){
+      out.push(`<div class="os-note err">${label}: the three states don't add up to the order count. Something is wrong with this file — don't trust these numbers.</div>`);
     }
-    const from = fromInput.value || null;
-    const to = toInput.value || null;
-    const updated = recomputeFulfillmentSummary(fulfillmentSummarySlim, from, to);
-
-    document.getElementById('fsNumTotal').textContent = updated.totalFulfillable.toLocaleString();
-    document.getElementById('fsNumSo').textContent = updated.soCount.toLocaleString();
-    document.getElementById('fsNumTo').textContent = updated.toCount.toLocaleString();
-    document.getElementById('fsNumShipped').textContent = updated.totalShipped.toLocaleString();
-    document.getElementById('fsNumNotShipped').textContent = updated.totalNotShipped.toLocaleString();
-    document.getElementById('fsShippedBreak').innerHTML = `SO: ${updated.soShipped.toLocaleString()} &nbsp;|&nbsp; TO: ${updated.toShipped.toLocaleString()}`;
-    document.getElementById('fsNotShippedBreak').innerHTML = `SO: ${updated.soNotShipped.toLocaleString()} &nbsp;|&nbsp; TO: ${updated.toNotShipped.toLocaleString()}`;
-    const caughtUpEl = document.getElementById('fsCaughtUpThrough');
-    if(caughtUpEl){
-      if(updated.caughtUpThrough){
-        caughtUpEl.textContent = `Warehouse is caught up through: ${formatShortDate(updated.caughtUpThrough)}`;
-        caughtUpEl.style.display = '';
-      } else {
-        caughtUpEl.style.display = 'none';
-      }
+    if(r.unrecognisedStatuses.length){
+      out.push(`<div class="os-note warn">${label}: found status values this tab doesn't recognise — ${escapeHtml(r.unrecognisedStatuses.join(', '))}. Those orders are counted in the total but not in any state.</div>`);
     }
-    document.getElementById('fsGaugeAv').innerHTML = makeGauge(updated.pctShippedAv, '#5fa88a', '#1a7f37');
-    const gaugeNs = document.getElementById('fsGaugeNs');
-    const syncSub = document.getElementById('fsSyncSub');
-    if(gaugeNs){
-      gaugeNs.innerHTML = updated.pctShippedNs !== null ? makeGauge(updated.pctShippedNs, '#5fa88a', '#1a7f37') : makeGaugeEmpty();
-      if(syncSub) syncSub.textContent = updated.pctShippedNs !== null ? '% of Avectous-shipped orders also confirmed in NetSuite' : 'Upload the NetSuite Fulfilled file to see this';
-    }
+  });
+  const t = res.total;
+  if(t.totalRows > t.totalOrders){
+    out.push(`<div class="os-note info">The files hold ${fmt(t.totalRows)} rows but only ${fmt(t.totalOrders)} distinct orders. The ${fmt(t.totalRows - t.totalOrders)} extra rows are partially shipped orders, which NetSuite reports as one row for the shipped portion and one for the unshipped. Each is counted once here.</div>`);
   }
-
-  fromInput.addEventListener('change', applyFilter);
-  toInput.addEventListener('change', applyFilter);
-  if(clearBtn) clearBtn.addEventListener('click', ()=>{
-    fromInput.value = '';
-    toInput.value = '';
-    applyFilter();
-  });
-
-  const exportBtn = document.getElementById('fsExportComparison');
-  if(exportBtn) exportBtn.addEventListener('click', ()=>{
-    if(!fulfillmentSummarySlim){
-      alert('This result was saved before per-order export data existed — re-run the comparison on Load Data to enable this.');
-      return;
-    }
-    const from = fromInput.value || null;
-    const to = toInput.value || null;
-    const fromD = from ? new Date(from) : null;
-    const toD = to ? new Date(to) : null;
-    if(toD) toD.setHours(23,59,59,999);
-
-    const nsSet = new Set(fulfillmentSummarySlim.nsFulfilledList);
-    const avSoSet = new Set(fulfillmentSummarySlim.avShippedSoList);
-    const avToSet = new Set(fulfillmentSummarySlim.avShippedToList);
-    const { nsFulfilledProvided, avShippedProvided } = fulfillmentSummarySlim;
-
-    const rows = fulfillmentSummarySlim.slimRows
-      .filter(r=>{
-        if(!r.d) return false;
-        const d = new Date(r.d + 'T00:00:00');
-        if(fromD && d < fromD) return false;
-        if(toD && d > toD) return false;
-        return true;
-      })
-      .map(r=>{
-        const usable = r.o && norm(r.o) !== norm('- None -');
-        const avSet = r.t === 'TO' ? avToSet : avSoSet;
-        return {
-          'Order Number': r.o,
-          'Type': r.t === 'TO' ? 'Transfer Order' : 'Sales Order',
-          'Date': r.d,
-          'Shipped (per NetSuite Status)': r.shipped ? 'TRUE' : 'FALSE',
-          'Fulfilled in NetSuite': !nsFulfilledProvided ? 'N/A' : !usable ? 'N/A' : (nsSet.has(norm(r.o)) ? 'TRUE' : 'FALSE'),
-          'Fulfilled in Avectous': !avShippedProvided ? 'N/A' : !usable ? 'N/A' : (avSet.has(norm(r.o)) ? 'TRUE' : 'FALSE')
-        };
-      });
-
-    const dateNote = (from || to) ? ` (${from || 'start'} to ${to || 'end'})` : '';
-    exportStyledExcel('fulfillment_summary_comparison.xlsx', `Fulfillment & Audit Overview: Order Comparison${dateNote}`, rows);
-  });
+  return out.join('');
 }
 
 function render(){
-  document.getElementById('scorecardOverall')?.remove();
-  grid.className = 'view-' + currentView;
-  grid.innerHTML = '';
-  if(currentView === 'scorecard') renderScorecard();
-  else if(currentView === 'table') renderTableView();
-  else renderDetailed();
-}
-
-// Shared status classification used by the 3 simplified views
-function classifyStatus(result, s){
-  if(!result) return 'pending';
-  const missing = (s && s.hideMissingList) ? 0 : (result.totalMissing || 0);
-  const issues = (result.discrepancies || []).length;
-  return (missing > 0 || issues > 0) ? 'warn' : 'ok';
-}
-
-/* ---------- Scorecard view ---------- */
-function renderScorecard(){
-  const loaded = lastSectionsWithResults.filter(x=>x.result);
-  const okCount = loaded.filter(x=>classifyStatus(x.result, x.s)==='ok').length;
-  const pct = loaded.length ? Math.round((okCount/loaded.length)*100) : 0;
-
-  const overall = document.createElement('div');
-  overall.id = 'scorecardOverall';
-  overall.className = 'overview-panel';
-
-  const fs = fulfillmentSummaryResult;
-  const fmtCount = n => (n === null || n === undefined) ? '—' : n.toLocaleString();
-
-  const headerHtml = fs ? `
-    <div class="ov-header">
-      <div>
-        <h2 class="op-title">Fulfillment &amp; Audit Overview</h2>
-        <p class="op-sub">Shipping Status of Orders</p>
-        ${fulfillmentSummarySavedAt ? `<p class="op-sub" style="margin-top:2px;">${fulfillmentSummaryRanBy ? `Updated by ${escapeHtml(fulfillmentSummaryRanBy)} ` : 'Updated '}${formatLastUpdated(fulfillmentSummarySavedAt)}</p>` : ''}
-        ${fs.caughtUpThrough ? `<p class="op-sub" id="fsCaughtUpThrough" style="margin-top:6px; font-weight:700; color:var(--navy);">Warehouse is caught up through: ${formatShortDate(fs.caughtUpThrough)}</p>` : `<p class="op-sub" id="fsCaughtUpThrough" style="margin-top:6px; font-weight:700; color:var(--navy); display:none;"></p>`}
-      </div>
-      <div class="ov-header-right">
-        <div class="fs-daterange">
-          <div class="fs-daterange-label">Date Range</div>
-          <div class="fs-daterange-row">
-            <input type="date" id="fsFilterFrom" value="${fs.dateFrom || ''}" class="fs-date-input">
-            <span class="fs-daterange-sep">–</span>
-            <input type="date" id="fsFilterTo" value="${fs.dateTo || ''}" class="fs-date-input">
-            <button id="fsFilterClear" title="Clear filter — show all dates" class="fs-clear-btn">All</button>
-          </div>
-        </div>
-        <button id="fsExportComparison" class="ghost-sm" ${fs._slim ? '' : 'disabled title="Re-run this comparison to enable export"'}>Export Comparison</button>
-      </div>
-    </div>
-  ` : `
-    <div class="ov-header">
-      <div>
-        <h2 class="op-title">Fulfillment &amp; Audit Overview</h2>
-        <p class="op-sub">Load the Fulfillable Orders file on Load Data to see shipping metrics here</p>
-      </div>
-    </div>
-  `;
-
-  const statCardsHtml = fs ? `
-    <div class="ov-stats-row">
-      <div class="ov-stat-card">
-        <div class="ov-stat-value" id="fsNumTotal">${fmtCount(fs.totalFulfillable)}</div>
-        <div class="ov-stat-label">Total Orders to Fulfill</div>
-      </div>
-      <div class="ov-stat-card accent">
-        <div class="ov-stat-value" id="fsNumSo">${fmtCount(fs.soCount)}</div>
-        <div class="ov-stat-label">Sales Orders</div>
-      </div>
-      <div class="ov-stat-card accent">
-        <div class="ov-stat-value" id="fsNumTo">${fmtCount(fs.toCount)}</div>
-        <div class="ov-stat-label">Transfer Orders</div>
-      </div>
-      <div class="ov-stat-card good">
-        <div class="ov-stat-value" id="fsNumShipped">${fmtCount(fs.totalShipped)}</div>
-        <div class="ov-stat-label">Total Shipped</div>
-        <div class="ov-stat-breakdown" id="fsShippedBreak">SO: ${fmtCount(fs.soShipped)} &nbsp;|&nbsp; TO: ${fmtCount(fs.toShipped)}</div>
-      </div>
-      <div class="ov-stat-card warn">
-        <div class="ov-stat-value" id="fsNumNotShipped">${fmtCount(fs.totalNotShipped)}</div>
-        <div class="ov-stat-label">Total Not Shipped</div>
-        <div class="ov-stat-breakdown" id="fsNotShippedBreak">SO: ${fmtCount(fs.soNotShipped)} &nbsp;|&nbsp; TO: ${fmtCount(fs.toNotShipped)}</div>
-      </div>
-    </div>
-    ${fs._slim && fs._slim.unmappedStatuses && fs._slim.unmappedStatuses.length ? `<div class="sub" style="color:#c0392b; margin-top:2px; font-size:11px;">⚠ Unmapped status found, excluded from these counts: ${fs._slim.unmappedStatuses.map(s=>escapeHtml(s)).join(', ')}</div>` : ''}
-  ` : '';
-
-  const gaugesRowHtml = `
-    <div class="ov-gauges-row">
-      <div class="ov-gauge-card">
-        <div id="fsGaugeAv">${fs ? makeGauge(fs.pctShippedAv, '#5fa88a', '#1a7f37') : makeGaugeEmpty()}</div>
-        <div class="ov-gauge-text">
-          <div class="gauge-title">${ICON_SHIP}Order Shipping Progress</div>
-          <div class="gauge-sub">% of fulfillable orders shipped in Avectous</div>
-        </div>
-      </div>
-      <div class="ov-gauge-card">
-        <div id="fsGaugeNs">${fs && fs.pctShippedNs !== null ? makeGauge(fs.pctShippedNs, '#5fa88a', '#1a7f37') : makeGaugeEmpty()}</div>
-        <div class="ov-gauge-text">
-          <div class="gauge-title">${ICON_SYNC}Fulfillment Sync Progress</div>
-          <div class="gauge-sub" id="fsSyncSub">${fs && fs.pctShippedNs !== null ? '% of Avectous-shipped orders also confirmed in NetSuite' : 'Upload the NetSuite Fulfilled file to see this'}</div>
-        </div>
-      </div>
-      <div class="ov-gauge-card">
-        ${makeGauge(pct, '#7fb896', '#1a7f37')}
-        <div class="ov-gauge-text">
-          <div class="gauge-title">${ICON_AUDIT}Warehouse Audit Status</div>
-          <div class="gauge-sub muted">Audits complete: ${okCount} of ${loaded.length} &nbsp;|&nbsp; ${lastSectionsWithResults.length - loaded.length} pending</div>
-        </div>
-      </div>
-    </div>
-  `;
-
-  overall.innerHTML = headerHtml + statCardsHtml + gaugesRowHtml;
-  grid.before(overall);
-  wireFulfillmentDateFilter();
-
-  lastSectionsWithResults.forEach(({s, result, savedAt, ranBy})=>{
-    const status = classifyStatus(result, s);
-    const card = document.createElement('div');
-    card.className = 'score-card ' + status;
-    if(!result){
-      card.innerHTML = `
-        <div class="stripe"></div>
-        <div class="score-title-row"><h3>${s.title}</h3><span class="score-badge">Pending</span></div>
-        <div class="metric"><span class="n">—</span><span class="label">not loaded</span></div>
-        <div class="auditor-note-row">
-          <label for="note-input-${s.id}">Auditor notes:</label>
-          <input type="text" id="note-input-${s.id}" class="auditor-note-input" placeholder="Write note here." value="${escapeHtml(auditorNotes[s.id] || '')}">
-        </div>
-      `;
-    } else {
-      const missing = result.totalMissing || 0;
-      const issues = (result.discrepancies || []).length;
-      const oa = result.orderAudit;
-      const ordersMissingNum = oa ? oa.ordersFullyMissing : missing;
-      const ordersMissingLabel = oa ? (oa.ordersFullyMissing === 1 ? 'order missing' : 'orders missing') : (s.flagLabelShort || 'missing');
-      const analyzedCount = s.sourceOfTruth === 'netsuite' ? result.totalNs
-        : s.sourceOfTruth === 'avectous' ? result.totalAv
-        : Math.max(result.totalNs, result.totalAv);
-      const analyzedText = s.analyzedCountLabel
-        ? `${analyzedCount.toLocaleString()} ${s.analyzedCountLabel}`
-        : `${analyzedCount.toLocaleString()} record${analyzedCount!==1?'s':''} analyzed`;
-      const updatedLine = savedAt
-        ? `${analyzedText} · Updated${ranBy ? ' by ' + ranBy : ''} ${formatLastUpdated(savedAt)}`
-        : analyzedText;
-      let metricRowHtml;
-      if(s.matchedStatLabel){
-        // Custom pairing: e.g. "Fulfilled in NetSuite" / "NOT Fulfilled in NetSuite"
-        // instead of the default missing/mismatched framing.
-        metricRowHtml = `<div class="metric-row">
-             <div class="metric"><span class="n">${result.matchedCount}</span><span class="label">${s.matchedStatLabel}</span></div>
-             <div class="metric"><span class="n">${missing}</span><span class="label">${s.missingStatLabel || 'missing'}</span></div>
-           </div>`;
-      } else if(s.hideMissingList){
-        metricRowHtml = `<div class="metric-row"><div class="metric"><span class="n">${issues}</span><span class="label">${issues===1?'row':'rows'} mismatched</span></div></div>`;
-      } else {
-        metricRowHtml = `<div class="metric-row">
-             <div class="metric"><span class="n">${ordersMissingNum}</span><span class="label">${ordersMissingLabel}</span></div>
-             <div class="metric"><span class="n">${issues}</span><span class="label">${issues===1?'row':'rows'} mismatched</span></div>
-           </div>`;
-      }
-      const orderLevelNote = result.auditLevelUsed === 'order' ? `<div class="score-breakdown" style="color:var(--blue); font-weight:600;">Order-level only — product/qty not checked</div>` : '';
-      const invStatsHtml = result.inventoryStats ? `
-        <div class="score-breakdown" style="margin-top:8px; padding-top:8px; border-top:1px solid var(--border); font-size:11.5px; line-height:1.6;">
-          <div>Total SKUs in ${s.secondLabel || 'Avectous'}: <strong style="color:var(--navy);">${result.totalAv.toLocaleString()}</strong></div>
-          <div>Total Matches: <strong style="color:var(--navy);">${result.matchedCount.toLocaleString()}</strong></div>
-          <div>Total Mismatches: <strong style="color:var(--navy);">${result.inventoryStats.unexplainedMismatchCount.toLocaleString()}</strong></div>
-          <div>SKU Discrepancy Rate: <strong style="color:var(--navy);">${result.inventoryStats.skuDiscrepancyRate.toFixed(2)}%</strong></div>
-          <div style="margin-top:4px;">Total Units in ${s.secondLabel || 'Avectous'}: <strong style="color:var(--navy);">${result.inventoryStats.totalAvUnits.toLocaleString()}</strong></div>
-          <div>Total Unit Discrepancy: <strong style="color:var(--navy);">${result.inventoryStats.totalUnitDiscrepancy.toLocaleString()}</strong></div>
-          <div>Quantity Discrepancy Rate: <strong style="color:var(--navy);">${result.inventoryStats.qtyDiscrepancyRate.toFixed(3)}%</strong></div>
-        </div>
-      ` : '';
-      card.innerHTML = `
-        <div class="stripe"></div>
-        <div class="score-title-row"><h3>${s.title}</h3><span class="score-badge">${status==='ok'?'Clean':'Review'}</span></div>
-        ${metricRowHtml}
-        ${orderLevelNote}
-        ${invStatsHtml}
-        <div style="margin-top:10px; display:flex; gap:6px; flex-wrap:wrap;">
-          ${s.hideMissingList ? '' : `<button class="ghost-sm score-export-missing" ${missing?'':'disabled style="opacity:0.4; cursor:not-allowed;"'}>Export ${s.missingStatLabel || 'Missing'}</button>`}
-          ${s.matchedStatLabel ? '' : `<button class="ghost-sm score-export-mismatches" ${issues?'':'disabled style="opacity:0.4; cursor:not-allowed;"'}>Export Mismatches</button>`}
-          <button class="ghost-sm score-export-comparison">Export Comparison</button>
-        </div>
-        <div class="score-updated-line">${updatedLine}</div>
-        ${result.latestNsDate ? `<div class="score-updated-line" style="font-weight:600;">Latest Order in NetSuite: ${formatLastUpdated(typeof result.latestNsDate === 'string' ? result.latestNsDate : result.latestNsDate.toISOString())}</div>` : ''}
-        ${result.syncLag ? `<div class="score-updated-line" style="font-weight:600;">Avg time to sync: ${formatDurationHours(result.syncLag.avgHours)}</div>` : ''}
-        <div class="auditor-note-row">
-          <label for="note-input-${s.id}">Auditor notes:</label>
-          <input type="text" id="note-input-${s.id}" class="auditor-note-input" placeholder="Write note here." value="${escapeHtml(auditorNotes[s.id] || '')}">
-        </div>
-      `;
-    }
-    grid.appendChild(card);
-
-    const noteInput = card.querySelector('.auditor-note-input');
-    if(noteInput){
-      let saveTimeout = null;
-      noteInput.addEventListener('input', ()=>{
-        clearTimeout(saveTimeout);
-        saveTimeout = setTimeout(()=>saveAuditorNote(s.id, noteInput.value), 600);
-      });
-      noteInput.addEventListener('blur', ()=>{
-        clearTimeout(saveTimeout);
-        saveAuditorNote(s.id, noteInput.value);
-      });
-    }
-
-    if(result){
-      const emBtn = card.querySelector('.score-export-missing');
-      if(emBtn) emBtn.addEventListener('click', ()=>exportStyledExcel(`${s.id}_missing.xlsx`, `${s.title}: ${result.missingLabel}`, result.missingRows));
-      const edBtn = card.querySelector('.score-export-mismatches');
-      if(edBtn) edBtn.addEventListener('click', ()=>exportStyledExcel(`${s.id}_discrepancies.xlsx`, `${s.title}: ${s.discrepancyLabelOverride || 'Field Discrepancies'}`, result.discrepancies));
-      const ecBtn = card.querySelector('.score-export-comparison');
-      if(ecBtn) ecBtn.addEventListener('click', ()=>{
-        if(result.inventoryComparisonRows){
-          exportStyledExcel(`${s.id}_comparison.xlsx`, `${s.secondLabel || 'Avectous'} vs NetSuite Inventory Comparison`, result.inventoryComparisonRows);
-        } else {
-          exportStyledExcel(`${s.id}_line_comparison.xlsx`, `Line-Level Comparison: ${s.secondLabel || 'Avectous'} Order Lines vs. NetSuite`, result.lineComparison);
-        }
-      });
-    }
-  });
-}
-
-// Styled Excel export for line-level data — matches the house style: a merged
-// title row, navy header with white bold text, and green/red highlighting on
-// any "...Match" column (TRUE/FALSE) so mismatches jump out visually.
-async function exportStyledExcel(filename, title, rows){
-  if(!rows.length){
-    alert('Nothing to export for this list.');
+  const el = document.getElementById('results');
+  if(!current){
+    el.innerHTML = `<div class="panel"><div class="empty-state">No data yet — load the two files below and press Update Dashboard.</div></div>`;
     return;
   }
-  const workbook = new ExcelJS.Workbook();
-  const sheet = workbook.addWorksheet('Sheet1');
-  const cols = Object.keys(rows[0]);
+  const t = current.total;
+  const w = [pct(t.fully, t.totalOrders), pct(t.partial, t.totalOrders), pct(t.notStarted, t.totalOrders)];
 
-  sheet.mergeCells(1, 1, 1, cols.length);
-  const titleCell = sheet.getCell(1, 1);
-  titleCell.value = title;
-  titleCell.font = { bold: true, size: 14, name: 'Arial' };
-  titleCell.alignment = { horizontal: 'center', vertical: 'bottom' };
+  el.innerHTML = `
+    <div class="os-hero">
+      <div class="os-hero-head">
+        <div>
+          <h2>All orders — 810 Texas DC</h2>
+          <p class="os-sub">Sales orders 4866 &middot; transfer orders 4867 &middot; every order counted once</p>
+        </div>
+        <div style="text-align:right;">
+          <div style="font-size:26px; font-weight:800; color:var(--green); line-height:1;">${w[0].toFixed(1)}%</div>
+          <div style="font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:0.3px; font-weight:600;">fully shipped</div>
+        </div>
+      </div>
 
-  const headerRowIdx = 3;
-  cols.forEach((col, i)=>{
-    const cell = sheet.getCell(headerRowIdx, i + 1);
-    cell.value = col;
-    cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
-    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F4E78' } };
-    cell.alignment = { vertical: 'center' };
-  });
-  sheet.getRow(headerRowIdx).height = 20;
+      <div class="os-tiles">
+        <div class="os-tile accent"><div class="v">${fmt(t.totalOrders)}</div><div class="l">Total orders</div></div>
+        <div class="os-tile good"><div class="v">${fmt(t.fully)}</div><div class="l">Fully shipped</div></div>
+        <div class="os-tile warn"><div class="v">${fmt(t.partial)}</div><div class="l">Partially shipped</div></div>
+        <div class="os-tile bad"><div class="v">${fmt(t.notStarted)}</div><div class="l">Not started</div></div>
+      </div>
 
-  const matchCols = cols
-    .map((col, i) => ({ col, idx: i + 1 }))
-    .filter(c => /match$/i.test(c.col));
+      <div class="os-bar">
+        <span style="width:${w[0]}%; background:#1a7f37;"></span>
+        <span style="width:${w[1]}%; background:#e0a83c;"></span>
+        <span style="width:${w[2]}%; background:#c22a2a;"></span>
+      </div>
+      <div class="os-legend">
+        <span><i style="background:#1a7f37;"></i>Fully shipped ${fmt(t.fully)}</span>
+        <span><i style="background:#e0a83c;"></i>Partially shipped ${fmt(t.partial)}</span>
+        <span><i style="background:#c22a2a;"></i>Not started ${fmt(t.notStarted)}</span>
+      </div>
+    </div>
 
-  const isoDatePattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/;
-  rows.forEach((row, rIdx)=>{
-    const excelRow = headerRowIdx + 1 + rIdx;
-    cols.forEach((col, cIdx)=>{
-      const cell = sheet.getCell(excelRow, cIdx + 1);
-      let val = row[col];
-      if(val === undefined || val === null) val = '';
-      if(val instanceof Date){
-        cell.value = val;
-        cell.numFmt = 'm/d/yyyy';
-      } else if(typeof val === 'string' && isoDatePattern.test(val)){
-        cell.value = new Date(val);
-        cell.numFmt = 'm/d/yyyy';
-      } else {
-        cell.value = val;
-      }
-    });
-    matchCols.forEach(({idx})=>{
-      const cell = sheet.getCell(excelRow, idx);
-      const v = String(cell.value).toUpperCase();
-      if(v === 'TRUE'){
-        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFB7E1CD' } };
-      } else if(v === 'FALSE'){
-        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF4C7C3' } };
-      }
-    });
-  });
+    <div class="os-split">
+      ${sideCard(ORDER_STATUS.so, current.so, 'Sales orders')}
+      ${sideCard(ORDER_STATUS.to, current.to, 'Transfer orders')}
+    </div>
 
-  cols.forEach((col, i)=>{
-    const maxLen = Math.max(col.length, ...rows.map(r => String(r[col] ?? '').length));
-    sheet.getColumn(i + 1).width = Math.min(Math.max(maxLen + 2, 10), 45);
-  });
-  sheet.views = [{ state: 'frozen', ySplit: headerRowIdx }];
-
-  const buffer = await workbook.xlsx.writeBuffer();
-  const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-}
-
-function exportScorecardToExcel(){
-  const rows = lastSectionsWithResults.map(({s, result})=>{
-    if(!result){
-      return { Area: s.title, Status: 'Pending', 'Total in NetSuite': '', 'Matched/Total (2nd System)': '', 'Orders Missing': '', 'Lines Missing': '', 'Lines Mismatched': '' };
-    }
-    const matchedVal = s.sourceOfTruth === 'netsuite' ? result.matchedCount : result.totalAv;
-    return {
-      Area: s.title,
-      Status: classifyStatus(result, s) === 'ok' ? 'Clean' : 'Review',
-      'Total in NetSuite': result.totalNs,
-      'Matched/Total (2nd System)': matchedVal,
-      'Orders Missing': result.orderAudit ? result.orderAudit.ordersFullyMissing : 'n/a',
-      'Lines Missing': result.totalMissing,
-      'Lines Mismatched': (result.discrepancies || []).length
-    };
-  });
-  const ws = XLSX.utils.json_to_sheet(rows);
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Integration Health');
-  const stamp = new Date().toISOString().slice(0,10);
-  XLSX.writeFile(wb, `BYLT_Integration_Health_${stamp}.xlsx`);
-}
-
-function exportScorecardToWord(){
-  const now = new Date();
-  const dateStr = now.toLocaleDateString();
-  const timeStr = now.toLocaleTimeString();
-
-  const rowsHtml = lastSectionsWithResults.map(({s, result})=>{
-    if(!result){
-      return `<tr>
-        <td style="padding:8px 10px; border:1px solid #d5dae0;">${s.title}</td>
-        <td style="padding:8px 10px; border:1px solid #d5dae0; background:#eef0f3; color:#6b7684; font-weight:bold;">Pending</td>
-        <td style="padding:8px 10px; border:1px solid #d5dae0;">—</td>
-        <td style="padding:8px 10px; border:1px solid #d5dae0;">—</td>
-        <td style="padding:8px 10px; border:1px solid #d5dae0;">—</td>
-        <td style="padding:8px 10px; border:1px solid #d5dae0;">—</td>
-        <td style="padding:8px 10px; border:1px solid #d5dae0;">—</td>
-      </tr>`;
-    }
-    const status = classifyStatus(result, s);
-    const matchedVal = s.sourceOfTruth === 'netsuite' ? result.matchedCount : result.totalAv;
-    const issues = (result.discrepancies || []).length;
-    const ordersMissing = result.orderAudit ? result.orderAudit.ordersFullyMissing : null;
-    const statusBg = status === 'ok' ? '#e5f5eb' : '#fbf1de';
-    const statusColor = status === 'ok' ? '#1a7f37' : '#c98a1a';
-    const statusText = status === 'ok' ? 'Clean' : 'Review';
-    return `<tr>
-      <td style="padding:8px 10px; border:1px solid #d5dae0;">${s.title}</td>
-      <td style="padding:8px 10px; border:1px solid #d5dae0; background:${statusBg}; color:${statusColor}; font-weight:bold;">${statusText}</td>
-      <td style="padding:8px 10px; border:1px solid #d5dae0; text-align:right;">${result.totalNs.toLocaleString()}</td>
-      <td style="padding:8px 10px; border:1px solid #d5dae0; text-align:right;">${matchedVal.toLocaleString()}</td>
-      <td style="padding:8px 10px; border:1px solid #d5dae0; text-align:right; ${ordersMissing>0?'color:#c22a2a; font-weight:bold;':''}">${ordersMissing===null?'n/a':ordersMissing}</td>
-      <td style="padding:8px 10px; border:1px solid #d5dae0; text-align:right; ${result.totalMissing>0?'color:#c22a2a; font-weight:bold;':''}">${result.totalMissing}</td>
-      <td style="padding:8px 10px; border:1px solid #d5dae0; text-align:right; ${issues>0?'color:#c22a2a; font-weight:bold;':''}">${issues}</td>
-    </tr>`;
-  }).join('');
-
-  const loaded = lastSectionsWithResults.filter(x=>x.result);
-  const okCount = loaded.filter(x=>classifyStatus(x.result, x.s)==='ok').length;
-  const pct = loaded.length ? Math.round((okCount/loaded.length)*100) : 0;
-
-  const html = `
-    <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">
-    <head><meta charset="utf-8"><title>BYLT Integration Health</title></head>
-    <body style="font-family:Calibri,Arial,sans-serif; color:#1c2733;">
-      <h1 style="color:#1e3a5f; font-size:22px; margin-bottom:2px;">BYLT Integration Health</h1>
-      <p style="color:#6b7684; font-size:12px; margin-top:0;">NetSuite ↔ Avectous · Generated ${dateStr} at ${timeStr}</p>
-      <p style="font-size:14px; margin:16px 0;"><b>${okCount} of ${loaded.length}</b> loaded areas are clean (${pct}% overall health). ${lastSectionsWithResults.length - loaded.length} area(s) not yet loaded.</p>
-      <table style="border-collapse:collapse; width:100%; font-size:13px;">
-        <thead>
-          <tr style="background:#1e3a5f; color:#fff;">
-            <th style="padding:8px 10px; border:1px solid #1e3a5f; text-align:left;">Area</th>
-            <th style="padding:8px 10px; border:1px solid #1e3a5f; text-align:left;">Status</th>
-            <th style="padding:8px 10px; border:1px solid #1e3a5f; text-align:right;">Total NetSuite</th>
-            <th style="padding:8px 10px; border:1px solid #1e3a5f; text-align:right;">Matched/2nd System</th>
-            <th style="padding:8px 10px; border:1px solid #1e3a5f; text-align:right;">Orders Missing</th>
-            <th style="padding:8px 10px; border:1px solid #1e3a5f; text-align:right;">Lines Missing</th>
-            <th style="padding:8px 10px; border:1px solid #1e3a5f; text-align:right;">Lines Mismatched</th>
-          </tr>
-        </thead>
-        <tbody>${rowsHtml}</tbody>
-      </table>
-    </body>
-    </html>
+    ${notes(current)}
   `;
-
-  const blob = new Blob(['\ufeff', html], { type: 'application/msword' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  const stamp = new Date().toISOString().slice(0,10);
-  a.href = url;
-  a.download = `BYLT_Integration_Health_${stamp}.doc`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
 }
 
-function wireClearLinks(){
-  grid.querySelectorAll('[data-clear]').forEach(el=>{
-    el.addEventListener('click', async ()=>{
-      const sectionId = el.getAttribute('data-clear');
-      const section = SECTIONS.find(s=>s.id===sectionId);
-      if(!confirm(`Clear the saved comparison for "${section.title}"? This removes it for everyone, not just you — you'll need to re-run Compare on Load Data to bring it back.`)) return;
-      el.textContent = 'Clearing…';
-      await clearSectionResult(sectionId);
-      await init();
-    });
-  });
+async function init(){
+  const shared = await loadSharedResults();
+  if(shared[ORDER_STATUS.id]){
+    current = shared[ORDER_STATUS.id].result;
+    savedAt = shared[ORDER_STATUS.id].savedAt;
+    ranBy   = shared[ORDER_STATUS.id].ranBy || null;
+  } else {
+    current = loadSectionResult(ORDER_STATUS.id);
+    savedAt = loadSectionSavedAt(ORDER_STATUS.id);
+    ranBy   = loadSectionRanBy(ORDER_STATUS.id);
+  }
+
+  document.getElementById('asOf').textContent = savedAt
+    ? `Last updated ${new Date(savedAt).toLocaleString()}${ranBy ? ' by ' + ranBy : ''}`
+    : 'No data loaded yet — load the two files below.';
+
+  render();
 }
-
-/* ---------- Traffic light table view ---------- */
-function renderTableView(){
-  const table = document.createElement('table');
-  table.innerHTML = `<thead><tr><th>Area</th><th>NetSuite</th><th>Matched</th><th>Orders Missing</th><th>Lines Missing</th><th>Lines Mismatched</th><th></th></tr></thead><tbody></tbody>`;
-  const tbody = table.querySelector('tbody');
-  lastSectionsWithResults.forEach(({s, result})=>{
-    const tr = document.createElement('tr');
-    if(!result){
-      tr.innerHTML = `
-        <td><span class="tl-dot pending"></span><span class="tl-area">${s.title}</span><div class="tl-sub">${s.sub}</div></td>
-        <td class="tl-num dash">—</td><td class="tl-num dash">—</td><td class="tl-num dash">—</td><td class="tl-num dash">—</td><td class="tl-num dash">—</td><td></td>
-      `;
-    } else {
-      const missing = result.totalMissing || 0;
-      const issues = (result.discrepancies || []).length;
-      const status = classifyStatus(result, s);
-      const matchedVal = s.sourceOfTruth === 'netsuite' ? result.matchedCount : result.totalAv;
-      const ordersMissing = result.orderAudit ? result.orderAudit.ordersFullyMissing : null;
-      const ordersMissingCell = s.hideMissingList ? '<td class="tl-num dash">—</td>' : `<td class="tl-num ${ordersMissing===null?'dash':(ordersMissing>0?'some':'zero')}">${ordersMissing===null?'—':ordersMissing}</td>`;
-      const linesMissingCell = s.hideMissingList ? '<td class="tl-num dash">—</td>' : `<td class="tl-num ${missing>0?'some':'zero'}">${missing}</td>`;
-      tr.innerHTML = `
-        <td><span class="tl-dot ${status}"></span><span class="tl-area">${s.title}</span><div class="tl-sub">${s.sub}</div></td>
-        <td class="tl-num">${result.totalNs.toLocaleString()}</td>
-        <td class="tl-num">${matchedVal.toLocaleString()}</td>
-        ${ordersMissingCell}
-        ${linesMissingCell}
-        <td class="tl-num ${issues>0?'some':'zero'}">${issues}</td>
-        <td><span class="clear-link" data-clear="${s.id}">Clear</span></td>
-      `;
-    }
-    tbody.appendChild(tr);
-  });
-  grid.appendChild(table);
-  wireClearLinks();
-}
-
-function wireDetailedLinks(){
-  grid.querySelectorAll('[data-goto-detailed]').forEach(el=>{
-    el.addEventListener('click', ()=>{
-      currentView = 'detailed';
-      localStorage.setItem('dashboardViewMode', currentView);
-      updateSwitcherActiveState();
-      render();
-    });
-  });
-}
-
-/* ---------- Detailed view (original, unchanged) ---------- */
-function renderDetailed(){
-  lastSectionsWithResults.forEach(({s, result, savedAt, ranBy})=>{
-    const card = document.createElement('div');
-    card.className = 'dash-card';
-    card.innerHTML = `
-      <h3>${s.title}</h3>
-      <div class="card-sub">${s.sub}</div>
-      <div class="card-sub">${savedAt ? `Last updated: ${formatLastUpdated(savedAt)}${ranBy ? ` by ${ranBy}` : ''}` : 'Last updated: never'}</div>
-      ${result && result.auditLevelUsed === 'order' ? `<div class="card-sub" style="color:var(--blue); font-weight:600;">Order-level only — product/qty not checked this run</div>` : ''}
-      ${result && result.latestNsDate ? `<div class="card-sub" style="font-weight:600;">Latest Order in NetSuite: ${formatLastUpdated(typeof result.latestNsDate === 'string' ? result.latestNsDate : result.latestNsDate.toISOString())}</div>` : ''}
-      ${result && result.syncLag ? `<div class="card-sub" style="font-weight:600;">Avg time to sync: ${formatDurationHours(result.syncLag.avgHours)} (median ${formatDurationHours(result.syncLag.medianHours)}, based on ${result.syncLag.sampleSize.toLocaleString()} orders)</div>` : ''}
-      ${s.netsuiteUrl ? `<a href="${s.netsuiteUrl}" target="_blank" rel="noopener" style="font-size:12px; color:var(--blue); font-weight:600; display:inline-block; margin-bottom:10px;">Open in NetSuite ↗</a>` : ''}
-      ${s.secondUrl ? `<a href="${s.secondUrl}" target="_blank" rel="noopener" style="font-size:12px; color:var(--blue); font-weight:600; display:inline-block; margin-bottom:10px; margin-left:14px;">Open in ${s.secondLabel || 'Avectous'} ↗</a>` : ''}
-      ${result ? renderCardBody(s, result) : `<div class="placeholder">Not loaded yet — go to <a href="load-data.html">Load Data</a> and compare this area.</div>`}
-    `;
-    grid.appendChild(card);
-
-    if(result){
-      const em = card.querySelector('.export-missing');
-      if(em) em.addEventListener('click', ()=>exportStyledExcel(`${s.id}_missing.xlsx`, `${s.title}: ${result.missingLabel}`, result.missingRows));
-      const ed = card.querySelector('.export-disc');
-      if(ed) ed.addEventListener('click', ()=>exportStyledExcel(`${s.id}_discrepancies.xlsx`, `${s.title}: ${s.discrepancyLabelOverride || 'Field Discrepancies'}`, result.discrepancies));
-      const elc = card.querySelector('.export-line-comparison');
-      if(elc) elc.addEventListener('click', ()=>{
-        if(result.inventoryComparisonRows){
-          exportStyledExcel(`${s.id}_comparison.xlsx`, `${s.secondLabel || 'Avectous'} vs NetSuite Inventory Comparison`, result.inventoryComparisonRows);
-        } else {
-          exportStyledExcel(`${s.id}_line_comparison.xlsx`, `Line-Level Comparison: ${s.secondLabel || 'Avectous'} Order Lines vs. NetSuite`, result.lineComparison);
-        }
-      });
-      card.querySelectorAll('[data-toggle-table]').forEach(toggle=>{
-        toggle.addEventListener('click', ()=>{
-          const key = toggle.getAttribute('data-toggle-table');
-          const tableEl = document.getElementById('table-'+key);
-          const collapsed = tableEl.classList.toggle('collapsed');
-          toggle.textContent = collapsed ? 'Show list ▾' : 'Hide list ▴';
-        });
-      });
-    }
-  });
-}
-
 init();
-
-const ICON_SHIP = `<svg class="gauge-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/></svg>`;
-const ICON_SYNC = `<svg class="gauge-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></svg>`;
-const ICON_AUDIT = `<svg class="gauge-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 3h6v2.5a1 1 0 0 1-1 1h-4a1 1 0 0 1-1-1V3z"/><path d="M9 12.5l1.8 1.8L15 10.5"/></svg>`;
-
-function formatShortDate(isoDateStr){
-  const d = new Date(isoDateStr + 'T00:00:00');
-  if(isNaN(d.getTime())) return isoDateStr;
-  return `${d.getMonth()+1}/${d.getDate()}/${String(d.getFullYear()).slice(-2)}`;
-}
-
-function makeGaugeEmpty(size){
-  size = size || 92;
-  const r = size*0.42, cx = size/2, cy = size*0.54, strokeW = size*0.11;
-  function polarToXY(angleDeg){
-    const rad = (angleDeg * Math.PI) / 180;
-    return { x: cx + r * Math.cos(rad), y: cy - r * Math.sin(rad) };
-  }
-  const start = polarToXY(180), end = polarToXY(0);
-  const bgPath = `M ${start.x} ${start.y} A ${r} ${r} 0 0 1 ${end.x} ${end.y}`;
-  return `
-    <div style="position:relative; width:${size}px; height:${size*0.62}px;">
-      <svg width="${size}" height="${size*0.62}" viewBox="0 0 ${size} ${size*0.62}">
-        <path d="${bgPath}" fill="none" stroke="var(--border)" stroke-width="${strokeW}" stroke-linecap="round"/>
-      </svg>
-      <div style="position:absolute; bottom:2px; left:0; width:100%; text-align:center; font-size:${size*0.19}px; font-weight:800; color:var(--muted);">—</div>
-    </div>
-  `;
-}
-
-function makeGauge(pct, colorStart, colorEnd, size){
-  size = size || 92;
-  const r = size*0.42, cx = size/2, cy = size*0.54, strokeW = size*0.11;
-  function polarToXY(angleDeg){
-    const rad = (angleDeg * Math.PI) / 180;
-    return { x: cx + r * Math.cos(rad), y: cy - r * Math.sin(rad) };
-  }
-  const start = polarToXY(180);
-  const end = polarToXY(0);
-  const bgPath = `M ${start.x} ${start.y} A ${r} ${r} 0 0 1 ${end.x} ${end.y}`;
-
-  const clamped = Math.max(0.4, Math.min(100, pct)); // always show a visible sliver, even near 0
-  const progressAngle = 180 - (clamped/100)*180;
-  const progEnd = polarToXY(progressAngle);
-  const fgPath = `M ${start.x} ${start.y} A ${r} ${r} 0 0 1 ${progEnd.x} ${progEnd.y}`;
-  const gradId = 'gaugeGrad' + Math.random().toString(36).slice(2);
-
-  return `
-    <div style="position:relative; width:${size}px; height:${size*0.62}px;">
-      <svg width="${size}" height="${size*0.62}" viewBox="0 0 ${size} ${size*0.62}">
-        <defs>
-          <linearGradient id="${gradId}" x1="0%" y1="0%" x2="100%" y2="0%">
-            <stop offset="0%" stop-color="${colorStart}"/>
-            <stop offset="100%" stop-color="${colorEnd}"/>
-          </linearGradient>
-        </defs>
-        <path d="${bgPath}" fill="none" stroke="var(--border)" stroke-width="${strokeW}" stroke-linecap="round"/>
-        <path d="${fgPath}" fill="none" stroke="url(#${gradId})" stroke-width="${strokeW}" stroke-linecap="round"/>
-      </svg>
-      <div style="position:absolute; bottom:2px; left:0; width:100%; text-align:center; font-size:${size*0.19}px; font-weight:800; color:var(--navy);">${pct.toFixed(1).replace('.0','')}%</div>
-    </div>
-  `;
-}
-
-function formatDurationHours(hours){
-  if(hours === null || hours === undefined || isNaN(hours)) return '—';
-  const abs = Math.abs(hours);
-  if(abs < 1) return `${Math.round(hours * 60)} min`;
-  if(abs < 24) return `${hours.toFixed(1)} hr`;
-  return `${(hours / 24).toFixed(1)} days`;
-}
-
-function formatLastUpdated(isoString){
-  const d = new Date(isoString);
-  const month = d.getMonth() + 1;
-  const day = d.getDate();
-  const year = String(d.getFullYear()).slice(-2);
-  let hours = d.getHours();
-  const minutes = String(d.getMinutes()).padStart(2, '0');
-  const ampm = hours >= 12 ? 'PM' : 'AM';
-  hours = hours % 12;
-  if(hours === 0) hours = 12;
-  return `${month}/${day}/${year} ${hours}:${minutes} ${ampm}`;
-}
-
-const MAX_INLINE_ROWS = 300;
-
-function renderCardBody(s, r){
-  const missingCols = r.missingRows.length ? Object.keys(r.missingRows[0]) : [];
-  const discCols = r.discrepancies.length ? Object.keys(r.discrepancies[0]) : [];
-  const secondName = s.secondLabel || 'Avectous';
-  const matchedLabel = s.matchedStatLabel || (s.sourceOfTruth === 'netsuite' ? `Matched in ${secondName}` : `Total in ${secondName}`);
-  const matchedValue = s.sourceOfTruth === 'netsuite' ? r.matchedCount : (s.matchedStatLabel ? r.matchedCount : r.totalAv);
-  const secondStat = `<div class="stat-card"><div class="label">${matchedLabel}</div><div class="value">${matchedValue.toLocaleString()}</div></div>`;
-  const firstStatValue = s.firstStatUsesAv ? r.totalAv : r.totalNs;
-  const nsTotalStat = s.hideNsTotalStat ? '' : `<div class="stat-card"><div class="label">${s.firstStatLabel || 'Total in NetSuite'}</div><div class="value">${firstStatValue.toLocaleString()}</div></div>`;
-  const missingLabel2 = s.missingStatLabel || 'Total Missing';
-  const missingStatCard = s.hideMissingList ? '' : `<div class="stat-card missing"><div class="label">${missingLabel2}</div><div class="value">${r.totalMissing.toLocaleString()}</div></div>`;
-  const statCount = [nsTotalStat, secondStat, missingStatCard].filter(Boolean).length;
-  const missingBlock = s.hideMissingList ? '' : `
-    <div class="table-header-row">
-      <h4>${r.missingLabel}<span class="count">(${r.missingRows.length.toLocaleString()})</span></h4>
-      <div style="display:flex; gap:8px; align-items:center;">
-        ${r.missingRows.length ? `<span class="toggle-table" data-toggle-table="${s.id}-missing">Show list ▾</span>` : ''}
-        <button class="ghost export-missing" ${r.missingRows.length?'':'disabled'}>Export Excel</button>
-      </div>
-    </div>
-    <div class="table-wrap ${r.missingRows.length ? 'collapsed' : ''}" id="table-${s.id}-missing">
-      ${missingCols.length ? renderTable(missingCols, r.missingRows) : `<div class="empty-state">Nothing missing — every record matched.</div>`}
-    </div>
-  `;
-  const invSummaryHtml = r.inventoryStats ? `
-    <div class="table-header-row" style="margin-top:4px;">
-      <h4>Summary</h4>
-    </div>
-    <div class="stat-row">
-      <div class="stat-card"><div class="label">Total SKUs in ${secondName}</div><div class="value">${r.totalAv.toLocaleString()}</div></div>
-      <div class="stat-card"><div class="label">Total Matches</div><div class="value">${r.matchedCount.toLocaleString()}</div></div>
-      <div class="stat-card missing"><div class="label">Total Mismatches</div><div class="value">${r.inventoryStats.unexplainedMismatchCount.toLocaleString()}</div></div>
-    </div>
-    <div class="sub" style="margin:-6px 0 12px; font-size:11.5px;">SKU Discrepancy Rate: <strong style="color:var(--navy);">${r.inventoryStats.skuDiscrepancyRate.toFixed(2)}%</strong> &nbsp;·&nbsp; plus ${r.inventoryStats.explainedMismatchCount.toLocaleString()} more explained by ${s.supplementaryFile ? s.supplementaryFile.label : 'open receipts'} (not counted above — pending, not a real discrepancy)</div>
-    <div class="stat-row">
-      <div class="stat-card"><div class="label">Total Units in ${secondName}</div><div class="value">${r.inventoryStats.totalAvUnits.toLocaleString()}</div></div>
-      <div class="stat-card missing"><div class="label">Total Unit Discrepancy</div><div class="value">${r.inventoryStats.totalUnitDiscrepancy.toLocaleString()}</div></div>
-      <div class="stat-card"><div class="label">Quantity Discrepancy Rate</div><div class="value">${r.inventoryStats.qtyDiscrepancyRate.toFixed(3)}%</div></div>
-    </div>
-  ` : '';
-
-  return `
-    <div style="margin-bottom:10px;">
-      <button class="ghost export-line-comparison">Export Line Comparison ↓</button>
-    </div>
-    ${invSummaryHtml}
-    <div class="stat-row ${statCount === 2 ? 'stat-row-2' : ''}">
-      ${nsTotalStat}
-      ${secondStat}
-      ${missingStatCard}
-    </div>
-    ${missingBlock}
-
-    <div class="table-header-row">
-      <h4>${s.discrepancyLabelOverride || 'Field Discrepancies'}<span class="count">(${r.discrepancies.length.toLocaleString()})</span></h4>
-      <div style="display:flex; gap:8px; align-items:center;">
-        ${r.discrepancies.length ? `<span class="toggle-table" data-toggle-table="${s.id}-disc">Show list ▾</span>` : ''}
-        <button class="ghost export-disc" ${r.discrepancies.length?'':'disabled'}>Export Excel</button>
-      </div>
-    </div>
-    <div class="table-wrap ${r.discrepancies.length ? 'collapsed' : ''}" id="table-${s.id}-disc">
-      ${discCols.length ? renderDiscTable(discCols, r.discrepancies) : `<div class="empty-state">No field mismatches on matched records.</div>`}
-    </div>
-  `;
-}
-
-function renderTable(cols, rows){
-  const truncated = rows.length > MAX_INLINE_ROWS;
-  const visibleRows = truncated ? rows.slice(0, MAX_INLINE_ROWS) : rows;
-  const notice = truncated
-    ? `<div class="empty-state" style="border-top:1px solid var(--border);">Showing first ${MAX_INLINE_ROWS.toLocaleString()} of ${rows.length.toLocaleString()} — use Export Excel above for the complete list.</div>`
-    : '';
-  return `<table><thead><tr>${cols.map(c=>`<th>${escapeHtml(c)}</th>`).join('')}</tr></thead>
-    <tbody>${visibleRows.map(row=>`<tr>${cols.map(c=>`<td>${escapeHtml(row[c])}</td>`).join('')}</tr>`).join('')}</tbody></table>${notice}`;
-}
-function renderDiscTable(cols, rows){
-  const truncated = rows.length > MAX_INLINE_ROWS;
-  const visibleRows = truncated ? rows.slice(0, MAX_INLINE_ROWS) : rows;
-  const notice = truncated
-    ? `<div class="empty-state" style="border-top:1px solid var(--border);">Showing first ${MAX_INLINE_ROWS.toLocaleString()} of ${rows.length.toLocaleString()} — use Export Excel above for the complete list.</div>`
-    : '';
-  return `<table><thead><tr>${cols.map(c=>`<th>${escapeHtml(c)}</th>`).join('')}</tr></thead>
-    <tbody>${visibleRows.map(row=>`<tr>${cols.map(c=>{
-      let val = row[c]; let cls = '';
-      if(c==='Difference' && val!==''){
-        const n = parseFloat(val);
-        cls = n<0 ? 'diff-neg' : (n>0 ? 'diff-pos' : '');
-        val = (n>0?'+':'') + n;
-      }
-      return `<td class="${cls}">${escapeHtml(val)}</td>`;
-    }).join('')}</tr>`).join('')}</tbody></table>${notice}`;
-}
 </script>
 </body>
 </html>

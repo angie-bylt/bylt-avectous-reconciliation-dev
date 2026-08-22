@@ -1105,3 +1105,153 @@ function computeComparison(s, nsData, avData, mapping, supplementaryData){
     openReceiptsRaw: supplementaryData ? supplementaryData : null
   };
 }
+
+/* ===========================================================
+   ORDER STATUS — 810 TEXAS DC
+   A standalone tab, not a NetSuite-vs-second-system comparison.
+   Two NetSuite exports, counted into three states per order.
+
+   Two counting rules matter here, and both were wrong in the
+   original spec:
+
+   1. COUNT DISTINCT ORDERS, NOT ROWS. These searches return one
+      row per fulfillment status per order, so a partially shipped
+      order produces two rows — one "Fulfilled", one "Unfulfilled".
+      Counting rows puts that single order in both buckets.
+
+   2. KEY ON INTERNAL ID, NOT PO/CHECK NUMBER. Replacement orders
+      inherit the original order's Shopify number, so PO/Check
+      Number is not unique and undercounts. Internal ID is the
+      only guaranteed-unique key on a NetSuite transaction.
+
+   Hence three states, not two: an order is "Fully shipped" only
+   if every one of its rows says Fulfilled; "Not started" only if
+   every row says Unfulfilled; "Partial" if it has both.
+=========================================================== */
+const ORDER_STATUS = {
+  id:'order_status',
+  title:'Order Status — 810 Texas DC',
+  so:{
+    label:'Fulfillable Sales Orders',
+    filePrefix:'BYLTFulfillableSalesOrdersResults',
+    savedSearch:'customsearch_fulfillable_orders_final',
+    url:'https://11170298.app.netsuite.com/app/common/search/savedsearchresults.nl?searchid=4866&saverun=T&whence=',
+    keyField:['Internal ID','PO/Check Number'],
+    statusField:['Fulfillment Status','Status'],
+    dateField:['Date']
+  },
+  to:{
+    label:'Fulfillable Transfer Orders',
+    filePrefix:'BYLTFulfillableTransferOrdersResults',
+    savedSearch:'customsearchfulfillable_to_final',
+    url:'https://11170298.app.netsuite.com/app/common/search/savedsearchresults.nl?searchid=4867&saverun=T&whence=',
+    keyField:['Internal ID','Document Number'],
+    statusField:['Fulfillment Status','Status'],
+    dateField:['Date']
+  },
+  fulfilledValue:'Fulfilled',
+  unfulfilledValue:'Unfulfilled'
+};
+
+// Groups rows by order and assigns each order exactly one state.
+// Returns counts plus enough detail to audit the result on screen.
+function computeOrderStatusSide(data, cfg){
+  if(!data || !data.rows || !data.rows.length) return null;
+
+  const keyCol    = guessColumn(data.headers, cfg.keyField);
+  const statusCol = guessColumn(data.headers, cfg.statusField);
+  const dateCol   = guessColumn(data.headers, cfg.dateField);
+
+  if(!keyCol || !statusCol){
+    return {
+      error:`Could not find the columns needed. Looked for a key like "${[].concat(cfg.keyField).join('" or "')}" and a status like "${[].concat(cfg.statusField).join('" or "')}". Columns found: ${data.headers.join(', ')}`
+    };
+  }
+
+  const F = norm(ORDER_STATUS.fulfilledValue);
+  const U = norm(ORDER_STATUS.unfulfilledValue);
+
+  const orders = new Map(); // key -> { f:bool, u:bool, other:Set, rows:n, date }
+  const unrecognised = new Set();
+
+  data.rows.forEach(row=>{
+    const key = String(row[keyCol] ?? '').trim();
+    if(!key) return;
+    let o = orders.get(key);
+    if(!o){ o = { f:false, u:false, rows:0, date:null }; orders.set(key, o); }
+    o.rows++;
+
+    const st = norm(row[statusCol]);
+    if(st === F) o.f = true;
+    else if(st === U) o.u = true;
+    else if(st) unrecognised.add(String(row[statusCol]).trim());
+
+    if(dateCol && !o.date){
+      const d = parseDateRobust(row[dateCol]);
+      if(d && !isNaN(d.getTime()) && d.getFullYear() > 2000) o.date = d;
+    }
+  });
+
+  let fully = 0, partial = 0, notStarted = 0, unknown = 0;
+  const partialKeys = [];
+  orders.forEach((o, key)=>{
+    if(o.f && o.u){ partial++; partialKeys.push(key); }
+    else if(o.f)  { fully++; }
+    else if(o.u)  { notStarted++; }
+    else          { unknown++; }
+  });
+
+  return {
+    keyColumn: keyCol,
+    statusColumn: statusCol,
+    totalRows: data.rows.length,
+    totalOrders: orders.size,
+    fully, partial, notStarted, unknown,
+    partialKeys: partialKeys.slice(0, 500),
+    duplicateRowCount: data.rows.length - orders.size,
+    unrecognisedStatuses: [...unrecognised].slice(0, 20),
+    reconciles: (fully + partial + notStarted + unknown) === orders.size
+  };
+}
+
+function computeOrderStatus(soData, toData){
+  const so = computeOrderStatusSide(soData, ORDER_STATUS.so);
+  const to = computeOrderStatusSide(toData, ORDER_STATUS.to);
+
+  const sum = (a, b, f) => {
+    const x = (a && !a.error) ? a[f] : 0;
+    const y = (b && !b.error) ? b[f] : 0;
+    return x + y;
+  };
+
+  return {
+    so, to,
+    total:{
+      totalOrders: sum(so, to, 'totalOrders'),
+      totalRows:   sum(so, to, 'totalRows'),
+      fully:       sum(so, to, 'fully'),
+      partial:     sum(so, to, 'partial'),
+      notStarted:  sum(so, to, 'notStarted'),
+      unknown:     sum(so, to, 'unknown')
+    }
+  };
+}
+
+// Shared save path used by both the Order Status tab and Load Data.
+async function syncSectionToShared(sectionId, result, ranBy){
+  saveSectionResult(sectionId, result, ranBy);
+  try{
+    const res = await fetch('/api/data', {
+      method:'POST',
+      headers:{'content-type':'application/json'},
+      body: JSON.stringify({ sectionId, result, ranBy: ranBy || null })
+    });
+    if(!res.ok){
+      const body = await res.json().catch(()=>({}));
+      return { ok:false, error: body.error || `Server returned ${res.status}` };
+    }
+    return { ok:true };
+  } catch(err){
+    return { ok:false, error: err.message };
+  }
+}
