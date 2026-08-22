@@ -25,7 +25,10 @@
     <h1>Order Status — 810 Texas DC</h1>
     <div class="path" id="asOf">Loading…</div>
   </div>
-  <button class="ghost" id="refreshBtn">Refresh</button>
+  <div style="display:flex; gap:10px;">
+    <button class="ghost" id="exportBtn" style="display:none;">Export proof &#8595;</button>
+    <button class="ghost" id="refreshBtn">Refresh</button>
+  </div>
 </div>
 
 <main>
@@ -63,7 +66,70 @@
         </div>
       </div>
 
-      <div class="run-row">
+
+      <div style="margin-top:22px; padding-top:16px; border-top:1px solid var(--border);">
+        <div style="font-size:12.5px; font-weight:700; color:var(--navy); margin-bottom:3px;">How every number on this tab is counted</div>
+        <div style="font-size:11.5px; color:var(--muted); margin-bottom:11px;">
+          Internal reference. This sits inside the upload panel so the dashboard itself stays clean &mdash;
+          the same notes are on the Summary &amp; Method sheet of Export proof, which is the version to share.
+        </div>
+        <div class="os-method-body open" style="margin-top:0;">
+          <strong>Counting an order once</strong>
+          <ol>
+            <li>Rows are grouped by <code>Internal ID</code>. An order with five rows still counts as one.</li>
+            <li>Internal ID rather than <code>PO/Check Number</code>, because replacement orders reuse the original order's Shopify number &mdash; that column isn't unique.</li>
+            <li>Transfer orders key on Internal ID too; <code>Document Number</code> gives the same answer.</li>
+          </ol>
+
+          <strong style="display:block; margin-top:11px;">Shipped vs not shipped</strong>
+          <ol>
+            <li><strong>Shipped</strong> &mdash; any line marked Fulfilled, including partially shipped orders.</li>
+            <li><strong>Not shipped</strong> &mdash; every line marked Unfulfilled.</li>
+            <li>Partials count as shipped because something physically left the building; the remainder is a customer-service follow-up, not warehouse work in progress. The partial count is still shown separately.</li>
+            <li>The two states always sum to the order count. A red warning appears on the tab if they ever don't.</li>
+          </ol>
+
+          <strong style="display:block; margin-top:11px;">How long shipping takes</strong>
+          <ol>
+            <li><code>Date Fulfilled</code> minus <code>Date</code>, in whole days, for orders that shipped.</li>
+            <li>Where an order shipped across several days, the last day counts.</li>
+            <li>Same day reads as zero.</li>
+          </ol>
+
+          <strong style="display:block; margin-top:11px;">How long the queue has been waiting</strong>
+          <ol>
+            <li>Today minus <code>Date</code>, for orders with nothing shipped at all.</li>
+            <li>Orders dated in the future are excluded &mdash; they can't be late yet.</li>
+            <li>The "waiting longer than N days" figure uses the 90th percentile of actual ship time, so the line moves with the warehouse's own pace rather than being an invented target.</li>
+          </ol>
+
+          <strong style="display:block; margin-top:11px;">By channel</strong>
+          <ol>
+            <li>Sales orders read channel from <code>Order Type</code>; transfer orders from <code>Channel</code>.</li>
+            <li>Blank channels show as "Not set" rather than being dropped.</li>
+            <li>The All channels row must equal the card above it.</li>
+          </ol>
+
+          <strong style="display:block; margin-top:11px;">Shipped per day</strong>
+          <ol>
+            <li>Each order counted once, on the day it finished shipping, from <code>Date Fulfilled</code>.</li>
+            <li>Last 21 days with activity.</li>
+          </ol>
+
+          <strong style="display:block; margin-top:11px;">Why there's no on-time percentage</strong>
+          <div style="margin-top:4px;">
+            Neither saved search carries a promised ship date. <code>Ship by Date</code> is blank on every
+            transfer order, and where it exists it matches <code>Ship Date</code> exactly &mdash; which is
+            itself the order date on 99.5% of rows. So the tab reports elapsed time rather than late vs
+            on-time. If a real promise date gets added to 4866 or 4867, that changes.
+          </div>
+
+          <strong style="display:block; margin-top:11px;">Columns detected on the last run</strong>
+          <div id="methodCols" style="margin-top:4px;"></div>
+        </div>
+      </div>
+
+      <div class="run-row" style="margin-top:18px;">
         <input type="text" id="ranBy" placeholder="Your name (optional)"
           style="padding:8px 11px; border:1px solid var(--border); border-radius:6px; font-size:13px; width:190px;">
         <button class="primary" id="runBtn" disabled>Update Dashboard</button>
@@ -81,6 +147,7 @@ let current = null, savedAt = null, ranBy = null;
 
 document.getElementById('logoutLink').addEventListener('click', e=>{ e.preventDefault(); logout(); });
 document.getElementById('refreshBtn').addEventListener('click', ()=>init());
+document.getElementById('exportBtn').addEventListener('click', exportProof);
 document.getElementById('link-so').href = ORDER_STATUS.so.url;
 document.getElementById('link-to').href = ORDER_STATUS.to.url;
 document.getElementById('ranBy').value = getLastUsedName();
@@ -172,17 +239,17 @@ const fmt = n => (n === null || n === undefined) ? '—' : Number(n).toLocaleStr
 
 function pct(part, whole){ return whole > 0 ? (part / whole) * 100 : 0; }
 
-function sideCard(cfg, r, label){
-  if(!r) return `
-    <div class="os-card">
-      <h3>${label}</h3>
-      <div class="placeholder">Not loaded yet</div>
-    </div>`;
-  if(r.error) return `
-    <div class="os-card">
-      <h3>${label}</h3>
-      <div class="os-note err">${escapeHtml(r.error)}</div>
-    </div>`;
+const CHANNEL_ORDER_HINT = ['Shopify','Shopify B2B','EDI','Manual','Replacement Order','Retail','Amazon','BYLT HQ'];
+
+function shortDay(iso){
+  const d = new Date(iso + 'T00:00:00');
+  return isNaN(d.getTime()) ? iso : `${d.getMonth()+1}/${d.getDate()}`;
+}
+
+function sideCard(r, label){
+  if(!r) return `<div class="os-card"><h3>${label}</h3><div class="placeholder">Not loaded yet</div></div>`;
+  if(r.error) return `<div class="os-card"><h3>${label}</h3><div class="os-note err">${escapeHtml(r.error)}</div></div>`;
+  const pct = r.totalOrders ? (r.shipped / r.totalOrders) * 100 : 0;
   return `
     <div class="os-card">
       <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -191,10 +258,113 @@ function sideCard(cfg, r, label){
       </div>
       <div class="os-big">${fmt(r.totalOrders)}</div>
       <div class="os-big-sub">distinct orders &middot; keyed on ${escapeHtml(r.keyColumn)}</div>
-      <div class="os-row"><span class="lbl">Fully shipped</span><span class="num" style="color:var(--green);">${fmt(r.fully)}</span></div>
-      <div class="os-row"><span class="lbl">Partially shipped</span><span class="num" style="color:#b8730a;">${fmt(r.partial)}</span></div>
-      <div class="os-row"><span class="lbl">Not started</span><span class="num" style="color:var(--red);">${fmt(r.notStarted)}</span></div>
+      <div class="os-row"><span class="lbl">Shipped</span><span class="num" style="color:var(--green);">${fmt(r.shipped)} <span style="color:var(--muted); font-weight:400;">(${pct.toFixed(1)}%)</span></span></div>
+      <div class="os-row"><span class="lbl">&nbsp;&nbsp;of which partial</span><span class="num" style="color:#b8730a;">${fmt(r.partial)}</span></div>
+      <div class="os-row"><span class="lbl">Not shipped</span><span class="num" style="color:var(--red);">${fmt(r.notShipped)}</span></div>
       ${r.unknown ? `<div class="os-row"><span class="lbl">Unrecognised status</span><span class="num">${fmt(r.unknown)}</span></div>` : ''}
+    </div>`;
+}
+
+function distBars(buckets, total, colour){
+  if(!buckets || !buckets.length) return '<div class="placeholder">No data.</div>';
+  const max = Math.max(...buckets.map(b=>b.count), 1);
+  return `<div class="os-dist">${buckets.map(b=>`
+    <div class="os-dist-row">
+      <span class="lab">${b.label}</span>
+      <div class="os-dist-track"><div class="os-dist-fill" style="width:${(b.count/max)*100}%; background:${colour};"></div></div>
+      <span class="val">${fmt(b.count)} <span style="color:var(--muted); font-weight:400; font-size:11px;">${total ? ((b.count/total)*100).toFixed(0) : 0}%</span></span>
+    </div>`).join('')}</div>`;
+}
+
+function pctBlock(s){
+  return `<div class="os-pcts">
+    <div class="os-pct"><div class="v">${s.median}</div><div class="l">Median</div></div>
+    <div class="os-pct"><div class="v">${s.p75}</div><div class="l">75th pct</div></div>
+    <div class="os-pct"><div class="v">${s.p90}</div><div class="l">90th pct</div></div>
+    <div class="os-pct"><div class="v">${s.worst}</div><div class="l">Longest</div></div>
+  </div>`;
+}
+
+function slaSection(r, label){
+  if(!r || r.error || !r.sla || !r.sla.count) return '';
+  const s = r.sla;
+  return `
+    <div class="os-section">
+      <h3>${label} &mdash; how long shipping takes</h3>
+      <div class="os-section-sub">Days from the order date to the day it shipped, across ${fmt(s.count)} shipped orders.</div>
+      ${pctBlock(s)}
+      ${distBars(s.buckets, s.count, '#1a7f37')}
+    </div>`;
+}
+
+function ageSection(r, bn, label){
+  if(!r || r.error || !r.age || !r.age.count) return '';
+  const a = r.age;
+  return `
+    <div class="os-section">
+      <h3>${label} &mdash; how long the queue has been waiting</h3>
+      <div class="os-section-sub">Days since the order was placed, for the ${fmt(a.count)} orders that have not shipped anything yet.</div>
+      <div class="os-headline">
+        <div><div class="hv">${a.median}</div><div class="hl">median days waiting</div></div>
+        ${bn ? `<div><div class="hv warn">${fmt(bn.over)}</div><div class="hl">waiting longer than ${bn.line} days &mdash; the point<br>by which 90% normally ship</div></div>` : ''}
+      </div>
+      ${distBars(a.buckets, a.count, '#c22a2a')}
+    </div>`;
+}
+
+function channelTable(r, label){
+  if(!r || r.error || !r.byChannel) return '';
+  const rows = Object.entries(r.byChannel).sort((a,b)=>{
+    const d = (b[1].total||0) - (a[1].total||0);
+    return d || (CHANNEL_ORDER_HINT.indexOf(a[0]) - CHANNEL_ORDER_HINT.indexOf(b[0]));
+  });
+  if(!rows.length) return '';
+  const tot = rows.reduce((a,[,v])=>({shipped:a.shipped+v.shipped, partial:a.partial+v.partial, notShipped:a.notShipped+v.notShipped, total:a.total+v.total}), {shipped:0,partial:0,notShipped:0,total:0});
+  const body = rows.map(([name,v])=>{
+    const pct = v.total ? (v.shipped/v.total)*100 : 0;
+    return `<tr>
+      <td class="os-chan-name">${escapeHtml(name === '- None -' ? 'Not set' : name)}</td>
+      <td class="n" style="color:var(--green); font-weight:700;">${fmt(v.shipped)}</td>
+      <td class="n" style="color:#b8730a;">${fmt(v.partial)}</td>
+      <td class="n" style="color:var(--red); font-weight:700;">${fmt(v.notShipped)}</td>
+      <td class="n" style="color:var(--muted);">${fmt(v.total)}</td>
+      <td class="n" style="font-weight:700;">${pct.toFixed(1)}%</td>
+    </tr>`;
+  }).join('');
+  return `
+    <div class="os-section">
+      <h3>${label} by channel</h3>
+      <div class="os-section-sub">Channel read from the <strong>${escapeHtml(r.channelColumn || 'n/a')}</strong> column &middot; each order counted once</div>
+      <table class="os-chan-table">
+        <thead><tr><th>Channel</th><th class="n">Shipped</th><th class="n">of which partial</th><th class="n">Not shipped</th><th class="n">Total</th><th class="n">% shipped</th></tr></thead>
+        <tbody>${body}</tbody>
+        <tfoot><tr>
+          <td>All channels</td><td class="n">${fmt(tot.shipped)}</td><td class="n">${fmt(tot.partial)}</td>
+          <td class="n">${fmt(tot.notShipped)}</td><td class="n">${fmt(tot.total)}</td>
+          <td class="n">${tot.total ? ((tot.shipped/tot.total)*100).toFixed(1) : 0}%</td>
+        </tr></tfoot>
+      </table>
+    </div>`;
+}
+
+function throughputChart(map, label, sub, days){
+  const n = days || 21;
+  const entries = Object.entries(map || {}).sort();
+  if(!entries.length) return `<div class="os-section"><h3>${label}</h3><div class="placeholder">No fulfillment dates in this file.</div></div>`;
+  const slice = entries.slice(-n);
+  const max = Math.max(...slice.map(([,v])=>v), 1);
+  const cols = slice.map(([day,v])=>`<div class="os-chart-col" title="${day}: ${fmt(v)}"><div class="seg only" style="height:${Math.max((v/max)*100, v>0?2:0)}%;"></div></div>`).join('');
+  const axis = slice.map(([day])=>`<div>${shortDay(day)}</div>`).join('');
+  const total = slice.reduce((a,[,v])=>a+v,0);
+  const busiest = slice.reduce((a,b)=> b[1]>a[1]?b:a);
+  return `
+    <div class="os-section">
+      <h3>${label}</h3>
+      <div class="os-section-sub">${sub}</div>
+      <div class="os-chart"><div class="os-chart-cols">${cols}</div><div class="os-chart-axis">${axis}</div></div>
+      <div style="margin-top:12px; font-size:12.5px; color:var(--muted);">
+        ${fmt(total)} orders across these ${slice.length} days &middot; busiest was ${shortDay(busiest[0])} at ${fmt(busiest[1])}
+      </div>
     </div>`;
 }
 
@@ -219,196 +389,166 @@ function notes(res){
 }
 
 
-const CHANNEL_ORDER_HINT = ['Shopify','Shopify B2B','EDI','Manual','Replacement Order','Retail','Amazon','BYLT HQ'];
+// Builds an audit workbook: the numbers, the rules behind them, and every
+// order that makes up each figure. Anyone can rebuild the dashboard from this
+// file without trusting the dashboard.
+const LEDGER_HEADERS = ['Internal ID','Order Number','Order Date','Date Shipped','Channel','State','Partial','Days to ship','Days waiting','Rows in file'];
 
-function channelTable(r, label){
-  if(!r || r.error || !r.byChannel) return '';
-  const rows = Object.entries(r.byChannel).sort((a,b)=>{
-    const d = (b[1].total || 0) - (a[1].total || 0);
-    if(d) return d;
-    return CHANNEL_ORDER_HINT.indexOf(a[0]) - CHANNEL_ORDER_HINT.indexOf(b[0]);
-  });
-  if(!rows.length) return '';
-
-  const tot = rows.reduce((a,[,v])=>({
-    fully:a.fully+v.fully, partial:a.partial+v.partial,
-    notStarted:a.notStarted+v.notStarted, total:a.total+v.total
-  }), {fully:0,partial:0,notStarted:0,total:0});
-
-  const body = rows.map(([name, v])=>`
-    <tr>
-      <td class="os-chan-name">${escapeHtml(name === '- None -' ? 'Not set' : name)}</td>
-      <td class="n" style="color:var(--green); font-weight:700;">${fmt(v.fully)}</td>
-      <td class="n" style="color:#b8730a; font-weight:700;">${fmt(v.partial)}</td>
-      <td class="n" style="color:var(--red); font-weight:700;">${fmt(v.notStarted)}</td>
-      <td class="n" style="color:var(--muted);">${fmt(v.total)}</td>
-    </tr>`).join('');
-
-  return `
-    <div class="os-section">
-      <h3>${label} by channel</h3>
-      <div class="os-section-sub">Channel read from the <strong>${escapeHtml(r.channelColumn || 'n/a')}</strong> column &middot; each order counted once</div>
-      <table class="os-chan-table">
-        <thead><tr>
-          <th>Channel</th><th class="n">Fully shipped</th><th class="n">Partial</th><th class="n">Not started</th><th class="n">Total</th>
-        </tr></thead>
-        <tbody>${body}</tbody>
-        <tfoot><tr>
-          <td>All channels</td>
-          <td class="n">${fmt(tot.fully)}</td>
-          <td class="n">${fmt(tot.partial)}</td>
-          <td class="n">${fmt(tot.notStarted)}</td>
-          <td class="n">${fmt(tot.total)}</td>
-        </tr></tfoot>
-      </table>
-    </div>`;
+function ledgerSheet(side, label){
+  if(!side || side.error || !side.ledger || !side.ledger.length) return null;
+  const body = side.ledger.map(r=>[
+    r[0], r[1], r[2], r[3], r[4] === '- None -' ? 'Not set' : r[4],
+    r[5] === 'shipped' ? 'Shipped' : r[5] === 'notShipped' ? 'Not shipped' : 'Unknown',
+    r[6] ? 'Yes' : '', r[7] === null ? '' : r[7], r[8] === null ? '' : r[8], r[9]
+  ]);
+  return XLSX.utils.aoa_to_sheet([LEDGER_HEADERS, ...body]);
 }
 
-function shortDay(iso){
-  const d = new Date(iso + 'T00:00:00');
-  return isNaN(d.getTime()) ? iso : `${d.getMonth()+1}/${d.getDate()}`;
-}
+function exportProof(){
+  if(!current) return;
+  const btn = document.getElementById('exportBtn');
+  const original = btn.innerHTML;
+  btn.disabled = true; btn.textContent = 'Building…';
 
-// Per-day counts of orders that finished shipping. Recent days only —
-// the tail of old dates isn't what anyone is looking at.
-function throughputChart(map, label, sub, days){
-  const n = days || 21;
-  const entries = Object.entries(map || {}).sort();
-  if(!entries.length) return `
-    <div class="os-section"><h3>${label}</h3><div class="placeholder">No fulfillment dates in this file.</div></div>`;
-  const slice = entries.slice(-n);
-  const max = Math.max(...slice.map(([,v])=>v), 1);
-  const cols = slice.map(([day, v])=>`
-    <div class="os-chart-col" title="${day}: ${fmt(v)}">
-      <div class="seg only" style="height:${Math.max((v / max) * 100, v > 0 ? 2 : 0)}%;"></div>
-    </div>`).join('');
-  const axis = slice.map(([day])=>`<div>${shortDay(day)}</div>`).join('');
-  const total = slice.reduce((a,[,v])=>a+v, 0);
-  const busiest = slice.reduce((a,b)=> b[1] > a[1] ? b : a);
+  try{
+    const wb = XLSX.utils.book_new();
+    const t = current.total;
+    const stamp = savedAt ? new Date(savedAt).toLocaleString() : new Date().toLocaleString();
 
-  return `
-    <div class="os-section">
-      <h3>${label}</h3>
-      <div class="os-section-sub">${sub}</div>
-      <div class="os-chart">
-        <div class="os-chart-cols">${cols}</div>
-        <div class="os-chart-axis">${axis}</div>
-      </div>
-      <div style="margin-top:12px; font-size:12.5px; color:var(--muted);">
-        ${fmt(total)} orders across these ${slice.length} days &middot;
-        busiest was ${shortDay(busiest[0])} at ${fmt(busiest[1])}
-      </div>
-    </div>`;
-}
+    const S = [];
+    const push = (a,b,c) => S.push([a === undefined ? '' : a, b === undefined ? '' : b, c === undefined ? '' : c]);
 
-// Where the warehouse actually is: orders grouped by the day they were
-// placed, split into fully shipped vs still open. The point at which the
-// bars flip from green to red is the edge of the backlog.
-function backlogChart(res){
-  const map = res.backlog || {};
-  const today = new Date();
-  const pad = n => String(n).padStart(2,'0');
-  const todayIso = `${today.getFullYear()}-${pad(today.getMonth()+1)}-${pad(today.getDate())}`;
+    push('ORDER STATUS — 810 TEXAS DC');
+    push('Figures as at', stamp);
+    push('Prepared by', ranBy || '');
+    push('Sources', 'NetSuite saved search 4866 (sales orders) and 4867 (transfer orders)');
+    push();
+    push('HEADLINE', 'Orders', 'Rule');
+    push('Total orders', t.totalOrders, 'Distinct Internal ID across both files. Not a row count.');
+    push('Shipped', t.shipped, 'Any line marked Fulfilled, including partially shipped orders.');
+    push('  of which partial', t.partial, 'Order has both Fulfilled and Unfulfilled lines. Counted inside Shipped.');
+    push('Not shipped', t.notShipped, 'Every line marked Unfulfilled.');
+    push('Rows in the two files', t.totalRows, 'Higher than the order count because partials appear twice.');
+    push();
+    push('WHY INTERNAL ID', '', 'Replacement orders reuse the original order\u2019s PO/Check Number, so that column is not unique and undercounts.');
+    push('WHY PARTIAL = SHIPPED', '', 'Something physically left the building; the remainder is a customer-service follow-up, not warehouse work in progress.');
+    push('WHY NO SLA TARGET', '', 'Neither saved search carries a promised ship date, so the figures below measure what actually happened rather than performance against a target.');
+    push();
 
-  const all = Object.entries(map).sort();
-  const past = all.filter(([d])=> d <= todayIso);
-  const future = all.filter(([d])=> d > todayIso);
-  const slice = past.slice(-21);
-  if(!slice.length) return '';
+    [['so','Sales orders'],['to','Transfer orders']].forEach(([k,label])=>{
+      const r = current[k];
+      if(!r || r.error) return;
+      push(label.toUpperCase());
+      push('Key column', r.keyColumn);
+      push('Status column', r.statusColumn);
+      push('Channel column', r.channelColumn || '');
+      push('Distinct orders', r.totalOrders);
+      push('Shipped', r.shipped);
+      push('  of which partial', r.partial);
+      push('Not shipped', r.notShipped);
+      if(r.sla && r.sla.count){
+        push('Days to ship — median', r.sla.median, 'Order date to date shipped, whole days.');
+        push('Days to ship — 90th pct', r.sla.p90);
+        push('Days to ship — longest', r.sla.worst);
+      }
+      if(r.age && r.age.count){
+        push('Days waiting — median', r.age.median, 'Order date to today, for orders with nothing shipped.');
+        push('Days waiting — longest', r.age.worst);
+      }
+      const bn = current.beyondNormal && current.beyondNormal[k];
+      if(bn) push('Waiting beyond ' + bn.line + ' days', bn.over, 'The ' + bn.line + '-day line is the 90th percentile of actual ship time, not a target.');
+      push();
+    });
 
-  const max = Math.max(...slice.map(([,v])=>v.shipped + v.open), 1);
-  const cut = res.caughtUpThrough ? res.caughtUpThrough.so : null;
+    push('HOW TO CHECK THIS YOURSELF');
+    push('1', 'Open a ledger tab. Filter State to Shipped. Count the rows — it equals the Shipped figure.');
+    push('2', 'Each ledger row is one order. Internal ID never repeats within a tab.');
+    push('3', 'Days to ship = Date Shipped minus Order Date. Days waiting = today minus Order Date.');
+    push('4', 'Pivot a ledger by Channel and State to rebuild the channel tables.');
 
-  const cols = slice.map(([day, v])=>{
-    const tot = v.shipped + v.open;
-    const mark = (cut && day === cut) ? ' os-chart-mark' : '';
-    return `
-      <div class="os-chart-col${mark}" title="${day} — shipped ${fmt(v.shipped)}, open ${fmt(v.open)}">
-        <div class="seg open" style="height:${(v.open / max) * 100}%;"></div>
-        <div class="seg ship" style="height:${(v.shipped / max) * 100}%;"></div>
-      </div>`;
-  }).join('');
-  const axis = slice.map(([day])=>`<div>${shortDay(day)}</div>`).join('');
+    const sum = XLSX.utils.aoa_to_sheet(S);
+    sum['!cols'] = [{wch:30},{wch:16},{wch:95}];
+    XLSX.utils.book_append_sheet(wb, sum, 'Summary & Method');
 
-  const futureNote = future.length
-    ? `<div style="margin-top:10px; font-size:12px; color:var(--muted);">${fmt(future.reduce((a,[,v])=>a+v.open+v.shipped,0))} orders are dated in the future (pre-orders or backorders) and sit outside this chart.</div>`
-    : '';
+    [['so','Sales Order Ledger'],['to','Transfer Order Ledger']].forEach(([k,name])=>{
+      const sh = ledgerSheet(current[k], name);
+      if(sh){
+        sh['!cols'] = [{wch:13},{wch:18},{wch:12},{wch:12},{wch:18},{wch:12},{wch:9},{wch:12},{wch:12},{wch:11}];
+        sh['!autofilter'] = { ref: XLSX.utils.encode_range({s:{r:0,c:0}, e:{r:current[k].ledger.length, c:LEDGER_HEADERS.length-1}}) };
+        XLSX.utils.book_append_sheet(wb, sh, name);
+      } else {
+        XLSX.utils.book_append_sheet(wb,
+          XLSX.utils.aoa_to_sheet([['Order detail was not saved with this run.'],
+            ['Re-run Update Dashboard to include it.']]), name);
+      }
+    });
 
-  return `
-    <div class="os-section">
-      <h3>Where the warehouse is</h3>
-      <div class="os-section-sub">Orders grouped by the day they were placed. Green is fully shipped, red is still open &mdash; the point where red takes over is the edge of the backlog.</div>
-      <div class="os-caught">
-        <span class="d">${cut ? shortDay(cut) : 'n/a'}</span>
-        <span class="t">${cut ? 'last order date that is 90%+ shipped &mdash; sales orders' : 'no day yet reaches 90% shipped'}</span>
-      </div>
-      <div class="os-chart" style="margin-top:12px;">
-        <div class="os-chart-cols">${cols}</div>
-        <div class="os-chart-axis">${axis}</div>
-      </div>
-      <div class="os-legend" style="margin-top:8px;">
-        <span><i style="background:#1a7f37;"></i>Fully shipped</span>
-        <span><i style="background:#d94a4a;"></i>Still open</span>
-      </div>
-      ${futureNote}
-    </div>`;
+    const d = new Date();
+    const pad = n => String(n).padStart(2,'0');
+    XLSX.writeFile(wb, `BYLT_Order_Status_810TX_${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}.xlsx`);
+  } catch(err){
+    alert('Could not build the export: ' + err.message);
+  } finally {
+    btn.disabled = false; btn.innerHTML = original;
+  }
 }
 
 function render(){
   const el = document.getElementById('results');
   if(!current){
-    el.innerHTML = `<div class="panel"><div class="empty-state">No data yet — load the two files below and press Update Dashboard.</div></div>`;
+    el.innerHTML = `<div class="panel"><div class="empty-state">No data yet &mdash; open "Update these numbers" below and load the two files.</div></div>`;
+    document.getElementById('exportBtn').style.display = 'none';
     return;
   }
+  document.getElementById('exportBtn').style.display = '';
   const t = current.total;
-  const w = [pct(t.fully, t.totalOrders), pct(t.partial, t.totalOrders), pct(t.notStarted, t.totalOrders)];
+  const pctShipped = t.totalOrders ? (t.shipped / t.totalOrders) * 100 : 0;
+  const w = [pctShipped, t.totalOrders ? (t.notShipped / t.totalOrders) * 100 : 0];
 
   el.innerHTML = `
     <div class="os-hero">
       <div class="os-hero-head">
         <div>
-          <h2>All orders — 810 Texas DC</h2>
+          <h2>All orders &mdash; 810 Texas DC</h2>
           <p class="os-sub">Sales orders 4866 &middot; transfer orders 4867 &middot; every order counted once</p>
         </div>
         <div style="text-align:right;">
-          <div style="font-size:26px; font-weight:800; color:var(--green); line-height:1;">${w[0].toFixed(1)}%</div>
-          <div style="font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:0.3px; font-weight:600;">fully shipped</div>
+          <div style="font-size:26px; font-weight:800; color:var(--green); line-height:1;">${pctShipped.toFixed(1)}%</div>
+          <div style="font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:0.3px; font-weight:600;">shipped</div>
         </div>
       </div>
-
-      <div class="os-tiles">
+      <div class="os-tiles" style="grid-template-columns:repeat(3,1fr);">
         <div class="os-tile accent"><div class="v">${fmt(t.totalOrders)}</div><div class="l">Total orders</div></div>
-        <div class="os-tile good"><div class="v">${fmt(t.fully)}</div><div class="l">Fully shipped</div></div>
-        <div class="os-tile warn"><div class="v">${fmt(t.partial)}</div><div class="l">Partially shipped</div></div>
-        <div class="os-tile bad"><div class="v">${fmt(t.notStarted)}</div><div class="l">Not started</div></div>
+        <div class="os-tile good"><div class="v">${fmt(t.shipped)}</div><div class="l">Shipped</div></div>
+        <div class="os-tile bad"><div class="v">${fmt(t.notShipped)}</div><div class="l">Not shipped</div></div>
       </div>
-
       <div class="os-bar">
         <span style="width:${w[0]}%; background:#1a7f37;"></span>
-        <span style="width:${w[1]}%; background:#e0a83c;"></span>
-        <span style="width:${w[2]}%; background:#c22a2a;"></span>
+        <span style="width:${w[1]}%; background:#c22a2a;"></span>
       </div>
       <div class="os-legend">
-        <span><i style="background:#1a7f37;"></i>Fully shipped ${fmt(t.fully)}</span>
-        <span><i style="background:#e0a83c;"></i>Partially shipped ${fmt(t.partial)}</span>
-        <span><i style="background:#c22a2a;"></i>Not started ${fmt(t.notStarted)}</span>
+        <span><i style="background:#1a7f37;"></i>Shipped ${fmt(t.shipped)} &mdash; includes ${fmt(t.partial)} partial</span>
+        <span><i style="background:#c22a2a;"></i>Not shipped ${fmt(t.notShipped)}</span>
       </div>
     </div>
 
     <div class="os-split">
-      ${sideCard(ORDER_STATUS.so, current.so, 'Sales orders')}
-      ${sideCard(ORDER_STATUS.to, current.to, 'Transfer orders')}
+      ${sideCard(current.so, 'Sales orders')}
+      ${sideCard(current.to, 'Transfer orders')}
     </div>
 
     ${notes(current)}
 
-    ${backlogChart(current)}
+    ${slaSection(current.so, 'Sales orders')}
+    ${ageSection(current.so, current.beyondNormal && current.beyondNormal.so, 'Sales orders')}
+    ${slaSection(current.to, 'Transfer orders')}
+    ${ageSection(current.to, current.beyondNormal && current.beyondNormal.to, 'Transfer orders')}
 
     ${channelTable(current.so, 'Sales orders')}
     ${channelTable(current.to, 'Transfer orders')}
 
-    ${throughputChart(current.so && current.so.byFulfilledDay, 'Sales orders fulfilled per day', 'Counted on the day the order finished shipping, from the Date Fulfilled column.')}
-    ${throughputChart(current.to && current.to.byFulfilledDay, 'Transfer orders fulfilled per day', 'Counted on the day the order finished shipping, from the Date Fulfilled column.')}
+    ${throughputChart(current.so && current.so.byFulfilledDay, 'Sales orders shipped per day', 'Counted on the day the order finished shipping.')}
+    ${throughputChart(current.to && current.to.byFulfilledDay, 'Transfer orders shipped per day', 'Counted on the day the order finished shipping.')}
   `;
 }
 
@@ -422,6 +562,22 @@ async function init(){
     current = loadSectionResult(ORDER_STATUS.id);
     savedAt = loadSectionSavedAt(ORDER_STATUS.id);
     ranBy   = loadSectionRanBy(ORDER_STATUS.id);
+  }
+
+  const mc = document.getElementById('methodCols');
+  if(mc){
+    if(current){
+      mc.innerHTML = [['so','Sales orders'],['to','Transfer orders']].map(([k,label])=>{
+        const r = current[k];
+        if(!r || r.error) return '<div class="mrow"><span class="k">' + label + '</span><span class="v">not loaded</span></div>';
+        const detail = 'key ' + escapeHtml(r.keyColumn) +
+          ' \u00b7 status ' + escapeHtml(r.statusColumn) +
+          ' \u00b7 channel ' + escapeHtml(r.channelColumn || 'n/a');
+        return '<div class="mrow"><span class="k">' + label + '</span><span class="v">' + detail + '</span></div>';
+      }).join('');
+    } else {
+      mc.innerHTML = '<div class="mrow"><span class="k">Nothing loaded yet</span><span class="v">\u2014</span></div>';
+    }
   }
 
   document.getElementById('asOf').textContent = savedAt

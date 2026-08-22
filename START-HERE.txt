@@ -1,46 +1,33 @@
-BYLT dashboard -- update 2
+BYLT dashboard -- update 4
 ==========================
 
-WHAT TO DO
-----------
-Upload these 4 files to your GitHub repo, replacing the existing ones:
+UPLOAD THESE 4 FILES to your GitHub repo, replacing the existing ones:
 
     index.html
     app.js
     style.css
     README.md
 
-GitHub -> Code tab -> Add file -> Upload files -> drag them in
--> scroll down -> Commit changes.
+GitHub -> Code -> Add file -> Upload files -> drag -> Commit changes.
+Then Netlify -> Deploys -> Trigger deploy.
 
-Then Netlify -> Deploys -> Trigger deploy -> Deploy site.
-
-(Do NOT upload this START-HERE.txt file.)
+(Do NOT upload this START-HERE.txt.)
 
 
-WHAT CHANGED
-------------
-1. The "Update these numbers" upload box is now collapsed.
-   Click its header to open it.
+WHAT CHANGED FROM UPDATE 3
+--------------------------
+The "Show how this is counted" links are gone from the dashboard.
+It now reads as a finished report, not a worked example.
 
-2. The row-count note is reworded to lead with the partial orders
-   rather than the row arithmetic.
+The counting rules moved to two places instead:
 
-3. NEW -- Where the warehouse is
-   Orders by the day they were placed, green = fully shipped,
-   red = still open. Headline date is the most recent order date
-   that is 90%+ shipped.
+1. FOR YOU -- inside the collapsed "Update these numbers" panel
+   at the bottom of the tab. Open it and scroll past the file
+   pickers. Every rule is there, plus a live readout of which
+   columns were detected on the last run.
 
-4. NEW -- Sales orders by channel
-   From the Order Type column: Shopify, Shopify B2B, EDI, Manual,
-   Replacement Order.
+2. FOR SHARING -- the Summary & Method sheet inside Export proof.
+   That is the version to hand to anyone who asks how a number
+   was arrived at.
 
-5. NEW -- Transfer orders by channel
-   From the Channel column: Retail, Amazon, BYLT HQ.
-
-6. NEW -- Sales orders fulfilled per day
-7. NEW -- Transfer orders fulfilled per day
-   Both from Date Fulfilled, last 21 days.
-
-Nothing else changed. Your netlify/ folder, login.html,
-auth-check.js, netlify.toml and package.json are untouched.
+Nothing else changed. Same sections, same figures.

@@ -504,7 +504,16 @@ function saveSectionResult(sectionId, resultObj, ranBy){
   //      counts stay accurate either way — only the row-level detail caps)
   //   3. If STILL too large, keep only the numeric summary — this tier
   //      can never realistically fail regardless of dataset size
-  const tier1 = { ...resultObj, lineComparison: [], lineComparisonTruncatedLocally: true };
+  const stripLedger = obj => {
+    if(!obj || typeof obj !== 'object') return obj;
+    const out = { ...obj };
+    ['so','to'].forEach(side=>{
+      if(out[side] && out[side].ledger) out[side] = { ...out[side], ledger: [], ledgerDroppedLocally: true };
+    });
+    return out;
+  };
+  const tier0 = stripLedger(resultObj);
+  const tier1 = { ...tier0, lineComparison: [], lineComparisonTruncatedLocally: true };
   const tier2 = { ...tier1, missingRows: (resultObj.missingRows||[]).slice(0,500), discrepancies: (resultObj.discrepancies||[]).slice(0,500), rowsTruncatedLocally: true };
   const tier3 = {
     totalNs: resultObj.totalNs, totalAv: resultObj.totalAv, matchedCount: resultObj.matchedCount,
@@ -514,7 +523,7 @@ function saveSectionResult(sectionId, resultObj, ranBy){
   };
 
   let saved = false;
-  for(const attempt of [resultObj, tier1, tier2, tier3]){
+  for(const attempt of [resultObj, tier0, tier1, tier2, tier3]){
     try{
       localStorage.setItem(STORAGE_PREFIX + sectionId, JSON.stringify(attempt));
       saved = true;
@@ -1140,7 +1149,8 @@ const ORDER_STATUS = {
     statusField:['Fulfillment Status','Status'],
     dateField:['Date'],
     channelField:['Order Type','Channel'],
-    fulfilledDateField:['Date Fulfilled']
+    fulfilledDateField:['Date Fulfilled'],
+    docField:['PO/Check Number']
   },
   to:{
     label:'Fulfillable Transfer Orders',
@@ -1151,7 +1161,8 @@ const ORDER_STATUS = {
     statusField:['Fulfillment Status','Status'],
     dateField:['Date'],
     channelField:['Channel','To Location'],
-    fulfilledDateField:['Date Fulfilled']
+    fulfilledDateField:['Date Fulfilled'],
+    docField:['Document Number']
   },
   fulfilledValue:'Fulfilled',
   unfulfilledValue:'Unfulfilled'
@@ -1170,7 +1181,14 @@ function isoDay(raw){
 }
 
 // Groups rows by order and assigns each order exactly one state.
-// Returns counts plus enough detail to audit the result on screen.
+//
+// A partially shipped order counts as SHIPPED. Something physically left the
+// building, and the outstanding items become a customer-service follow-up
+// rather than warehouse work in progress. The partial count is still reported
+// separately so it never disappears.
+//
+// Returns per-order detail as well as counts, so every number on screen can be
+// exported back to the exact orders that produced it.
 function computeOrderStatusSide(data, cfg){
   if(!data || !data.rows || !data.rows.length) return null;
 
@@ -1179,6 +1197,7 @@ function computeOrderStatusSide(data, cfg){
   const dateCol   = guessColumn(data.headers, cfg.dateField);
   const chanCol   = guessColumn(data.headers, cfg.channelField);
   const fulDateCol= guessColumn(data.headers, cfg.fulfilledDateField);
+  const docCol    = guessColumn(data.headers, cfg.docField);
 
   if(!keyCol || !statusCol){
     return {
@@ -1198,7 +1217,7 @@ function computeOrderStatusSide(data, cfg){
     if(!key) return;
     let o = orders.get(key);
     if(!o){
-      o = { f:false, u:false, rows:0, orderDay:null, fulfilledDay:null, channel:null };
+      o = { f:false, u:false, rows:0, orderDay:null, fulfilledDay:null, channel:null, doc:null };
       orders.set(key, o);
     }
     o.rows++;
@@ -1206,8 +1225,6 @@ function computeOrderStatusSide(data, cfg){
     const st = norm(row[statusCol]);
     if(st === F){
       o.f = true;
-      // Only fulfilled rows carry a fulfillment date. Keep the latest, so an
-      // order that shipped across several days lands on the day it finished.
       if(fulDateCol){
         const fd = isoDay(row[fulDateCol]);
         if(fd && (!o.fulfilledDay || fd > o.fulfilledDay)) o.fulfilledDay = fd;
@@ -1217,74 +1234,137 @@ function computeOrderStatusSide(data, cfg){
     else if(st) unrecognised.add(String(row[statusCol]).trim());
 
     if(dateCol && !o.orderDay) o.orderDay = isoDay(row[dateCol]);
-
+    if(docCol && !o.doc){
+      const dv = String(row[docCol] ?? '').trim();
+      if(dv) o.doc = dv;
+    }
     if(chanCol && (!o.channel || o.channel === BLANK)){
       const c = String(row[chanCol] ?? '').trim();
       if(c) o.channel = c;
     }
   });
 
-  let fully = 0, partial = 0, notStarted = 0, unknown = 0;
-  const byChannel = {};      // channel -> { fully, partial, notStarted, total }
-  const byOrderDay = {};     // day -> { shipped, open }
-  const byFulfilledDay = {}; // day -> count of orders finished that day
+  const todayIso = isoToday();
+  const dayDiff = (a, b) => Math.round((Date.parse(b + 'T00:00:00') - Date.parse(a + 'T00:00:00')) / 86400000);
 
-  const bump = (bucket, k) => {
-    if(!bucket[k]) bucket[k] = { fully:0, partial:0, notStarted:0, total:0 };
-    return bucket[k];
-  };
+  let shipped = 0, notShipped = 0, partial = 0, unknown = 0;
+  const byChannel = {};
+  const byOrderDay = {};
+  const byFulfilledDay = {};
+  const slaDays = [];
+  const ageDays = [];
+  const ledger = [];
 
-  orders.forEach(o=>{
+  orders.forEach((o, key)=>{
     let state;
-    if(o.f && o.u){ state = 'partial'; partial++; }
-    else if(o.f)  { state = 'fully'; fully++; }
-    else if(o.u)  { state = 'notStarted'; notStarted++; }
-    else          { state = null; unknown++; }
+    if(o.f){ state = 'shipped'; shipped++; if(o.u) partial++; }
+    else if(o.u){ state = 'notShipped'; notShipped++; }
+    else { state = 'unknown'; unknown++; }
 
-    const ch = bump(byChannel, o.channel || BLANK);
-    ch.total++;
-    if(state) ch[state]++;
+    const ch = o.channel || BLANK;
+    if(!byChannel[ch]) byChannel[ch] = { shipped:0, partial:0, notShipped:0, total:0 };
+    byChannel[ch].total++;
+    if(state === 'shipped'){ byChannel[ch].shipped++; if(o.u) byChannel[ch].partial++; }
+    else if(state === 'notShipped') byChannel[ch].notShipped++;
 
     if(o.orderDay){
       if(!byOrderDay[o.orderDay]) byOrderDay[o.orderDay] = { shipped:0, open:0 };
-      // "Shipped" here means fully shipped. A partial order still has work
-      // outstanding, so it counts as open for backlog purposes.
-      if(state === 'fully') byOrderDay[o.orderDay].shipped++;
+      if(state === 'shipped') byOrderDay[o.orderDay].shipped++;
       else byOrderDay[o.orderDay].open++;
     }
-
     if(o.fulfilledDay) byFulfilledDay[o.fulfilledDay] = (byFulfilledDay[o.fulfilledDay] || 0) + 1;
+
+    // SLA is measured, not promised: neither saved search carries a due date,
+    // so the only honest measure is how long the warehouse actually took.
+    let sla = null, age = null;
+    if(state === 'shipped' && o.orderDay && o.fulfilledDay){
+      sla = dayDiff(o.orderDay, o.fulfilledDay);
+      if(sla >= 0) slaDays.push(sla); else sla = null;
+    }
+    if(state === 'notShipped' && o.orderDay){
+      age = dayDiff(o.orderDay, todayIso);
+      if(age >= 0) ageDays.push(age); else age = null;
+    }
+
+    ledger.push([
+      key, o.doc || '', o.orderDay || '', o.fulfilledDay || '',
+      ch, state, o.u && o.f ? 1 : 0, sla, age, o.rows
+    ]);
   });
+
+  slaDays.sort((a,b)=>a-b);
+  ageDays.sort((a,b)=>a-b);
 
   return {
     keyColumn: keyCol,
     statusColumn: statusCol,
     channelColumn: chanCol || null,
+    dateColumn: dateCol || null,
     fulfilledDateColumn: fulDateCol || null,
     totalRows: data.rows.length,
     totalOrders: orders.size,
-    fully, partial, notStarted, unknown,
+    shipped, notShipped, partial, unknown,
     byChannel, byOrderDay, byFulfilledDay,
+    sla: summariseDays(slaDays, SLA_BUCKETS),
+    age: summariseDays(ageDays, AGE_BUCKETS),
+    ledger,
     duplicateRowCount: data.rows.length - orders.size,
     unrecognisedStatuses: [...unrecognised].slice(0, 20),
-    reconciles: (fully + partial + notStarted + unknown) === orders.size
+    reconciles: (shipped + notShipped + unknown) === orders.size
   };
 }
 
-// The most recent order date the warehouse has essentially cleared.
-// Walks backwards from today and stops at the first day where the shipped
-// share falls below the threshold — that boundary is where the backlog starts.
-function caughtUpThrough(byOrderDay, threshold){
-  const t = threshold === undefined ? 0.9 : threshold;
-  const today = new Date();
-  const todayIso = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
-  const days = Object.keys(byOrderDay).filter(d => d <= todayIso).sort();
-  for(let i = days.length - 1; i >= 0; i--){
-    const d = byOrderDay[days[i]];
-    const total = d.shipped + d.open;
-    if(total > 0 && (d.shipped / total) >= t) return days[i];
+function isoToday(){
+  const d = new Date();
+  const pad = n => String(n).padStart(2,'0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+}
+
+const SLA_BUCKETS = [
+  { label:'Same day', test: d => d <= 0 },
+  { label:'1 day',    test: d => d === 1 },
+  { label:'2 days',   test: d => d === 2 },
+  { label:'3-5 days', test: d => d <= 5 },
+  { label:'6-10 days',test: d => d <= 10 },
+  { label:'Over 10 days', test: () => true }
+];
+
+const AGE_BUCKETS = [
+  { label:'0-1 day',  test: d => d <= 1 },
+  { label:'2 days',   test: d => d === 2 },
+  { label:'3-5 days', test: d => d <= 5 },
+  { label:'6-10 days',test: d => d <= 10 },
+  { label:'Over 10 days', test: () => true }
+];
+
+// Percentiles plus a bucket histogram from an already-sorted array of day counts.
+function summariseDays(sorted, buckets){
+  if(!sorted.length){
+    return { count:0, median:null, p75:null, p90:null, p95:null, worst:null, buckets:[] };
   }
-  return null;
+  const at = q => sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * q))];
+  const counts = buckets.map(()=>0);
+  sorted.forEach(d=>{
+    for(let i = 0; i < buckets.length; i++){
+      if(buckets[i].test(d)){ counts[i]++; break; }
+    }
+  });
+  return {
+    count: sorted.length,
+    median: at(0.5), p75: at(0.75), p90: at(0.9), p95: at(0.95),
+    worst: sorted[sorted.length - 1],
+    buckets: buckets.map((b, i)=>({ label:b.label, count:counts[i] })).filter(b=>b.count > 0)
+  };
+}
+
+// How many orders are still waiting beyond the point where most already shipped.
+// Uses the 90th percentile of actual ship time as the line, so the threshold
+// comes from the warehouse's own performance rather than an arbitrary number.
+function beyondNormal(side){
+  if(!side || side.error || !side.sla || side.sla.median === null) return null;
+  const line = side.sla.p90;
+  const over = side.ledger.filter(r => r[5] === 'notShipped' && r[8] !== null && r[8] > line).length;
+  return { line, over };
 }
 
 // Merges the two sides' per-day maps into one sorted series.
@@ -1321,9 +1401,9 @@ function computeOrderStatus(soData, toData){
     total:{
       totalOrders: sum(so, to, 'totalOrders'),
       totalRows:   sum(so, to, 'totalRows'),
-      fully:       sum(so, to, 'fully'),
+      shipped:     sum(so, to, 'shipped'),
       partial:     sum(so, to, 'partial'),
-      notStarted:  sum(so, to, 'notStarted'),
+      notShipped:  sum(so, to, 'notShipped'),
       unknown:     sum(so, to, 'unknown')
     },
     backlog: mergeDaySeries(
@@ -1331,10 +1411,11 @@ function computeOrderStatus(soData, toData){
       toOk && toOk.byOrderDay,
       ['shipped','open']
     ),
-    caughtUpThrough: {
-      so: soOk ? caughtUpThrough(soOk.byOrderDay) : null,
-      to: toOk ? caughtUpThrough(toOk.byOrderDay) : null
-    }
+    beyondNormal: {
+      so: beyondNormal(soOk),
+      to: beyondNormal(toOk)
+    },
+    computedAt: isoToday()
   };
 }
 

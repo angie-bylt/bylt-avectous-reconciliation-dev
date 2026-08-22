@@ -14,62 +14,77 @@ Two NetSuite exports, uploaded on the tab itself (not on Load Data):
 - Search 4866, `customsearch_fulfillable_orders_final` -> fulfillable sales orders
 - Search 4867, `customsearchfulfillable_to_final`      -> fulfillable transfer orders
 
-Two counting rules, both of which the original spec got wrong:
+Three counting rules:
 
 **Count distinct orders, not rows.** These searches return one row per
-fulfillment status per order. A partially shipped order therefore produces
-two rows — one "Fulfilled", one "Unfulfilled" — and counting rows puts that
-single order in both the fulfilled and the unfulfilled bucket. On the
-21 Aug 2026 files this inflated the total by 215 orders.
+fulfillment status per order, so a partially shipped order produces two rows.
+Counting rows double-counts it.
 
 **Key on Internal ID, not PO/Check Number.** Replacement orders inherit the
-original order's Shopify number, so PO/Check Number is not unique. It
-undercounted sales orders by 14.
+original order's Shopify number, so PO/Check Number is not unique.
 
-Hence three states rather than two. An order is Fully shipped only if every
-row says Fulfilled, Not started only if every row says Unfulfilled, and
-Partial if it has both. The three always sum to the order count — the tab
-shows a red warning if they ever don't, rather than displaying wrong numbers
-silently.
+**A partially shipped order counts as SHIPPED.** Something physically left the
+building; the outstanding items are a customer-service follow-up, not warehouse
+work in progress. The partial count is reported separately so it stays visible.
+
+That gives two states, not three: shipped (any Fulfilled line) and not shipped
+(every line Unfulfilled). They always sum to the order count; the tab shows a
+red warning if they ever don't.
 
 Baseline from the 21 Aug 2026 exports:
 
-| | Total | Fully shipped | Partial | Not started |
+| | Total | Shipped | of which partial | Not shipped |
 |---|---|---|---|---|
-| 810 Texas DC | 21,693 | 11,589 | 215 | 9,889 |
-| Sales orders | 19,962 | 11,589 | 7 | 8,366 |
-| Transfer orders | 1,731 | 0 | 208 | 1,523 |
+| 810 Texas DC | 21,837 | 11,804 | 215 | 10,033 |
+| Sales orders | 20,106 | 11,596 | 7 | 8,510 |
+| Transfer orders | 1,731 | 208 | 208 | 1,523 |
 
-Note that zero transfer orders are completely fulfilled — all 208 with any
-fulfillment are partial. Worth investigating separately from this dashboard.
+### There is no SLA target in this data
 
-Column detection is by header name, never column letter, since the saved
-search column order can change. The tab shows which column it keyed on so a
-wrong guess is visible.
+Ship By Date is blank on every transfer order and 569 sales orders. Where it is
+populated it is identical to Ship Date on 100% of rows, and Ship Date is itself
+identical to the order date on 99.5% of rows. None of these columns carries a
+promised ship date.
+
+So the tab measures what actually happened rather than performance against a
+target:
+
+- **Days to ship** — order date to Date Fulfilled, for orders that shipped.
+  Sales orders run a median of 3 days, 90% within 8.
+- **Days waiting** — order date to today, for orders with nothing shipped.
+- **The "beyond normal" line** is the 90th percentile of actual ship time, not
+  an invented threshold. Anything past it is an outlier by the warehouse's own
+  pace.
+
+Do not reintroduce an order-date-based "how late are we" metric. Order date is
+the wrong clock: an EDI order placed in March with a ship date of 1 Aug is
+20 days late, not 164.
 
 ### Sections on the tab
 
-**Where the warehouse is** — orders grouped by the day they were *placed*,
-green for fully shipped, red for still open. The headline date is the most
-recent order date that is at least 90% shipped; past that point the backlog
-starts. Orders dated in the future (pre-orders, backorders) are excluded from
-the chart and reported underneath as a count.
+**How long shipping takes** — percentiles plus a distribution, per order type.
+
+**How long the queue has been waiting** — aging of unshipped orders, with the
+count sitting beyond the 90th-percentile line.
 
 **By channel** — sales orders read channel from `Order Type`, transfer orders
-from `Channel`. Each order counted once, so the "All channels" row always
-matches the card above it.
+from `Channel`. The All channels row always matches the card above it.
 
-**Fulfilled per day** — orders counted on the day they *finished* shipping,
-from `Date Fulfilled`. Where an order shipped across several days, the latest
-date wins. Last 21 days shown.
+**Shipped per day** — orders counted on the day they finished shipping.
 
-The upload panel is collapsed by default so the tab reads as a dashboard.
-Click "Update these numbers" to open it.
+### Show your work
 
-**Overlap worth resolving:** the Integration Health scorecard still carries a
-fulfillment widget built on search 4854, which defines "fulfillable" more
-loosely (any status except Closed and Pending Approval). It will report a
-different shipped count than this tab. Decide which one is authoritative.
+The dashboard itself stays clean — no methodology disclosures on the page, so
+it reads as a finished report rather than a worked example. The full set of
+counting rules lives inside the collapsed "Update these numbers" panel, which
+only whoever refreshes the data opens, along with a live readout of which
+columns were detected on the last run. The **Export proof** button in the header builds a workbook
+with a Summary & Method sheet and one row per order in a filterable ledger, so
+anyone can rebuild the figures without trusting the dashboard. The ledger is
+kept in the shared copy; if the browser's local storage runs out it is the first
+thing dropped, and the export says so rather than exporting a partial file.
+
+The upload panel is collapsed by default. Click "Update these numbers" to open it.
 
 ## How data works
 
