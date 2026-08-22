@@ -1,0 +1,46 @@
+BYLT dashboard -- update 2
+==========================
+
+WHAT TO DO
+----------
+Upload these 4 files to your GitHub repo, replacing the existing ones:
+
+    index.html
+    app.js
+    style.css
+    README.md
+
+GitHub -> Code tab -> Add file -> Upload files -> drag them in
+-> scroll down -> Commit changes.
+
+Then Netlify -> Deploys -> Trigger deploy -> Deploy site.
+
+(Do NOT upload this START-HERE.txt file.)
+
+
+WHAT CHANGED
+------------
+1. The "Update these numbers" upload box is now collapsed.
+   Click its header to open it.
+
+2. The row-count note is reworded to lead with the partial orders
+   rather than the row arithmetic.
+
+3. NEW -- Where the warehouse is
+   Orders by the day they were placed, green = fully shipped,
+   red = still open. Headline date is the most recent order date
+   that is 90%+ shipped.
+
+4. NEW -- Sales orders by channel
+   From the Order Type column: Shopify, Shopify B2B, EDI, Manual,
+   Replacement Order.
+
+5. NEW -- Transfer orders by channel
+   From the Channel column: Retail, Amazon, BYLT HQ.
+
+6. NEW -- Sales orders fulfilled per day
+7. NEW -- Transfer orders fulfilled per day
+   Both from Date Fulfilled, last 21 days.
+
+Nothing else changed. Your netlify/ folder, login.html,
+auth-check.js, netlify.toml and package.json are untouched.

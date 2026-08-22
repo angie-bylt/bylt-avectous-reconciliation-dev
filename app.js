@@ -1138,7 +1138,9 @@ const ORDER_STATUS = {
     url:'https://11170298.app.netsuite.com/app/common/search/savedsearchresults.nl?searchid=4866&saverun=T&whence=',
     keyField:['Internal ID','PO/Check Number'],
     statusField:['Fulfillment Status','Status'],
-    dateField:['Date']
+    dateField:['Date'],
+    channelField:['Order Type','Channel'],
+    fulfilledDateField:['Date Fulfilled']
   },
   to:{
     label:'Fulfillable Transfer Orders',
@@ -1147,11 +1149,25 @@ const ORDER_STATUS = {
     url:'https://11170298.app.netsuite.com/app/common/search/savedsearchresults.nl?searchid=4867&saverun=T&whence=',
     keyField:['Internal ID','Document Number'],
     statusField:['Fulfillment Status','Status'],
-    dateField:['Date']
+    dateField:['Date'],
+    channelField:['Channel','To Location'],
+    fulfilledDateField:['Date Fulfilled']
   },
   fulfilledValue:'Fulfilled',
   unfulfilledValue:'Unfulfilled'
 };
+
+// Normalises a date cell to YYYY-MM-DD, or null if it isn't a real date.
+// NetSuite writes "None" into empty date columns rather than leaving them blank.
+function isoDay(raw){
+  if(raw === null || raw === undefined) return null;
+  const str = String(raw).trim();
+  if(!str || norm(str) === 'none') return null;
+  const d = parseDateRobust(raw);
+  if(!d || isNaN(d.getTime()) || d.getFullYear() < 2000) return null;
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+}
 
 // Groups rows by order and assigns each order exactly one state.
 // Returns counts plus enough detail to audit the result on screen.
@@ -1161,6 +1177,8 @@ function computeOrderStatusSide(data, cfg){
   const keyCol    = guessColumn(data.headers, cfg.keyField);
   const statusCol = guessColumn(data.headers, cfg.statusField);
   const dateCol   = guessColumn(data.headers, cfg.dateField);
+  const chanCol   = guessColumn(data.headers, cfg.channelField);
+  const fulDateCol= guessColumn(data.headers, cfg.fulfilledDateField);
 
   if(!keyCol || !statusCol){
     return {
@@ -1170,48 +1188,119 @@ function computeOrderStatusSide(data, cfg){
 
   const F = norm(ORDER_STATUS.fulfilledValue);
   const U = norm(ORDER_STATUS.unfulfilledValue);
+  const BLANK = '- None -';
 
-  const orders = new Map(); // key -> { f:bool, u:bool, other:Set, rows:n, date }
+  const orders = new Map();
   const unrecognised = new Set();
 
   data.rows.forEach(row=>{
     const key = String(row[keyCol] ?? '').trim();
     if(!key) return;
     let o = orders.get(key);
-    if(!o){ o = { f:false, u:false, rows:0, date:null }; orders.set(key, o); }
+    if(!o){
+      o = { f:false, u:false, rows:0, orderDay:null, fulfilledDay:null, channel:null };
+      orders.set(key, o);
+    }
     o.rows++;
 
     const st = norm(row[statusCol]);
-    if(st === F) o.f = true;
+    if(st === F){
+      o.f = true;
+      // Only fulfilled rows carry a fulfillment date. Keep the latest, so an
+      // order that shipped across several days lands on the day it finished.
+      if(fulDateCol){
+        const fd = isoDay(row[fulDateCol]);
+        if(fd && (!o.fulfilledDay || fd > o.fulfilledDay)) o.fulfilledDay = fd;
+      }
+    }
     else if(st === U) o.u = true;
     else if(st) unrecognised.add(String(row[statusCol]).trim());
 
-    if(dateCol && !o.date){
-      const d = parseDateRobust(row[dateCol]);
-      if(d && !isNaN(d.getTime()) && d.getFullYear() > 2000) o.date = d;
+    if(dateCol && !o.orderDay) o.orderDay = isoDay(row[dateCol]);
+
+    if(chanCol && (!o.channel || o.channel === BLANK)){
+      const c = String(row[chanCol] ?? '').trim();
+      if(c) o.channel = c;
     }
   });
 
   let fully = 0, partial = 0, notStarted = 0, unknown = 0;
-  const partialKeys = [];
-  orders.forEach((o, key)=>{
-    if(o.f && o.u){ partial++; partialKeys.push(key); }
-    else if(o.f)  { fully++; }
-    else if(o.u)  { notStarted++; }
-    else          { unknown++; }
+  const byChannel = {};      // channel -> { fully, partial, notStarted, total }
+  const byOrderDay = {};     // day -> { shipped, open }
+  const byFulfilledDay = {}; // day -> count of orders finished that day
+
+  const bump = (bucket, k) => {
+    if(!bucket[k]) bucket[k] = { fully:0, partial:0, notStarted:0, total:0 };
+    return bucket[k];
+  };
+
+  orders.forEach(o=>{
+    let state;
+    if(o.f && o.u){ state = 'partial'; partial++; }
+    else if(o.f)  { state = 'fully'; fully++; }
+    else if(o.u)  { state = 'notStarted'; notStarted++; }
+    else          { state = null; unknown++; }
+
+    const ch = bump(byChannel, o.channel || BLANK);
+    ch.total++;
+    if(state) ch[state]++;
+
+    if(o.orderDay){
+      if(!byOrderDay[o.orderDay]) byOrderDay[o.orderDay] = { shipped:0, open:0 };
+      // "Shipped" here means fully shipped. A partial order still has work
+      // outstanding, so it counts as open for backlog purposes.
+      if(state === 'fully') byOrderDay[o.orderDay].shipped++;
+      else byOrderDay[o.orderDay].open++;
+    }
+
+    if(o.fulfilledDay) byFulfilledDay[o.fulfilledDay] = (byFulfilledDay[o.fulfilledDay] || 0) + 1;
   });
 
   return {
     keyColumn: keyCol,
     statusColumn: statusCol,
+    channelColumn: chanCol || null,
+    fulfilledDateColumn: fulDateCol || null,
     totalRows: data.rows.length,
     totalOrders: orders.size,
     fully, partial, notStarted, unknown,
-    partialKeys: partialKeys.slice(0, 500),
+    byChannel, byOrderDay, byFulfilledDay,
     duplicateRowCount: data.rows.length - orders.size,
     unrecognisedStatuses: [...unrecognised].slice(0, 20),
     reconciles: (fully + partial + notStarted + unknown) === orders.size
   };
+}
+
+// The most recent order date the warehouse has essentially cleared.
+// Walks backwards from today and stops at the first day where the shipped
+// share falls below the threshold — that boundary is where the backlog starts.
+function caughtUpThrough(byOrderDay, threshold){
+  const t = threshold === undefined ? 0.9 : threshold;
+  const today = new Date();
+  const todayIso = `${today.getFullYear()}-${String(today.getMonth()+1).padStart(2,'0')}-${String(today.getDate()).padStart(2,'0')}`;
+  const days = Object.keys(byOrderDay).filter(d => d <= todayIso).sort();
+  for(let i = days.length - 1; i >= 0; i--){
+    const d = byOrderDay[days[i]];
+    const total = d.shipped + d.open;
+    if(total > 0 && (d.shipped / total) >= t) return days[i];
+  }
+  return null;
+}
+
+// Merges the two sides' per-day maps into one sorted series.
+function mergeDaySeries(a, b, fields){
+  const out = {};
+  [a, b].forEach(src=>{
+    if(!src) return;
+    Object.keys(src).forEach(day=>{
+      if(!out[day]){ out[day] = {}; fields.forEach(f => out[day][f] = 0); }
+      fields.forEach(f=>{
+        const v = typeof src[day] === 'number' ? src[day] : (src[day][f] || 0);
+        out[day][f] += v;
+      });
+    });
+  });
+  return out;
 }
 
 function computeOrderStatus(soData, toData){
@@ -1224,6 +1313,9 @@ function computeOrderStatus(soData, toData){
     return x + y;
   };
 
+  const soOk = so && !so.error ? so : null;
+  const toOk = to && !to.error ? to : null;
+
   return {
     so, to,
     total:{
@@ -1233,6 +1325,15 @@ function computeOrderStatus(soData, toData){
       partial:     sum(so, to, 'partial'),
       notStarted:  sum(so, to, 'notStarted'),
       unknown:     sum(so, to, 'unknown')
+    },
+    backlog: mergeDaySeries(
+      soOk && soOk.byOrderDay,
+      toOk && toOk.byOrderDay,
+      ['shipped','open']
+    ),
+    caughtUpThrough: {
+      so: soOk ? caughtUpThrough(soOk.byOrderDay) : null,
+      to: toOk ? caughtUpThrough(toOk.byOrderDay) : null
     }
   };
 }

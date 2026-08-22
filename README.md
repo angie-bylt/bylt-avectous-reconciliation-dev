@@ -47,6 +47,25 @@ Column detection is by header name, never column letter, since the saved
 search column order can change. The tab shows which column it keyed on so a
 wrong guess is visible.
 
+### Sections on the tab
+
+**Where the warehouse is** — orders grouped by the day they were *placed*,
+green for fully shipped, red for still open. The headline date is the most
+recent order date that is at least 90% shipped; past that point the backlog
+starts. Orders dated in the future (pre-orders, backorders) are excluded from
+the chart and reported underneath as a count.
+
+**By channel** — sales orders read channel from `Order Type`, transfer orders
+from `Channel`. Each order counted once, so the "All channels" row always
+matches the card above it.
+
+**Fulfilled per day** — orders counted on the day they *finished* shipping,
+from `Date Fulfilled`. Where an order shipped across several days, the latest
+date wins. Last 21 days shown.
+
+The upload panel is collapsed by default so the tab reads as a dashboard.
+Click "Update these numbers" to open it.
+
 **Overlap worth resolving:** the Integration Health scorecard still carries a
 fulfillment widget built on search 4854, which defines "fulfillable" more
 loosely (any status except Closed and Pending Approval). It will report a

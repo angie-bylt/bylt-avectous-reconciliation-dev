@@ -31,41 +31,47 @@
 <main>
   <div id="results"></div>
 
-  <div class="panel">
-    <h2>Update these numbers</h2>
-    <div class="sub">
-      Export both saved searches from NetSuite, drop the files here, then press Update.
-      Everyone who signs in sees the result — they don't need to load anything.
+  <div class="os-toggle-panel">
+    <div class="os-toggle-head" id="uploadToggle">
+      <span class="tt">Update these numbers</span>
+      <span class="cx" id="uploadToggleLabel">Open &#9662;</span>
     </div>
-
-    <div class="upload-row">
-      <div class="upload-box">
-        <label>Fulfillable Sales Orders</label>
-        <div style="font-size:11.5px; color:var(--muted); margin-bottom:7px;">
-          Search 4866 ·
-          <a href="#" id="link-so" target="_blank" rel="noopener" style="color:var(--blue); font-weight:600;">Open in NetSuite ↗</a>
-        </div>
-        <input type="file" id="file-so" accept=".csv,.xls,.xlsx">
-        <div class="upload-status" id="status-so">No file loaded</div>
+    <div class="os-toggle-body" id="uploadBody">
+      <div class="sub" style="margin:14px 0;">
+        Export both saved searches from NetSuite, drop the files here, then press Update.
+        Everyone who signs in sees the result &mdash; they don't need to load anything.
       </div>
-      <div class="upload-box">
-        <label>Fulfillable Transfer Orders</label>
-        <div style="font-size:11.5px; color:var(--muted); margin-bottom:7px;">
-          Search 4867 ·
-          <a href="#" id="link-to" target="_blank" rel="noopener" style="color:var(--blue); font-weight:600;">Open in NetSuite ↗</a>
-        </div>
-        <input type="file" id="file-to" accept=".csv,.xls,.xlsx">
-        <div class="upload-status" id="status-to">No file loaded</div>
-      </div>
-    </div>
 
-    <div class="run-row">
-      <input type="text" id="ranBy" placeholder="Your name (optional)"
-        style="padding:8px 11px; border:1px solid var(--border); border-radius:6px; font-size:13px; width:190px;">
-      <button class="primary" id="runBtn" disabled>Update Dashboard</button>
-      <span class="run-note" id="runNote">Load both files to enable this.</span>
+      <div class="upload-row">
+        <div class="upload-box">
+          <label>Fulfillable Sales Orders</label>
+          <div style="font-size:11.5px; color:var(--muted); margin-bottom:7px;">
+            Search 4866 &middot;
+            <a href="#" id="link-so" target="_blank" rel="noopener" style="color:var(--blue); font-weight:600;">Open in NetSuite &#8599;</a>
+          </div>
+          <input type="file" id="file-so" accept=".csv,.xls,.xlsx">
+          <div class="upload-status" id="status-so">No file loaded</div>
+        </div>
+        <div class="upload-box">
+          <label>Fulfillable Transfer Orders</label>
+          <div style="font-size:11.5px; color:var(--muted); margin-bottom:7px;">
+            Search 4867 &middot;
+            <a href="#" id="link-to" target="_blank" rel="noopener" style="color:var(--blue); font-weight:600;">Open in NetSuite &#8599;</a>
+          </div>
+          <input type="file" id="file-to" accept=".csv,.xls,.xlsx">
+          <div class="upload-status" id="status-to">No file loaded</div>
+        </div>
+      </div>
+
+      <div class="run-row">
+        <input type="text" id="ranBy" placeholder="Your name (optional)"
+          style="padding:8px 11px; border:1px solid var(--border); border-radius:6px; font-size:13px; width:190px;">
+        <button class="primary" id="runBtn" disabled>Update Dashboard</button>
+        <span class="run-note" id="runNote">Load both files to enable this.</span>
+      </div>
     </div>
   </div>
+
 </main>
 
 <script src="app.js"></script>
@@ -78,6 +84,11 @@ document.getElementById('refreshBtn').addEventListener('click', ()=>init());
 document.getElementById('link-so').href = ORDER_STATUS.so.url;
 document.getElementById('link-to').href = ORDER_STATUS.to.url;
 document.getElementById('ranBy').value = getLastUsedName();
+
+document.getElementById('uploadToggle').addEventListener('click', ()=>{
+  const open = document.getElementById('uploadBody').classList.toggle('open');
+  document.getElementById('uploadToggleLabel').innerHTML = open ? 'Close &#9652;' : 'Open &#9662;';
+});
 
 /* ---------- file reading ---------- */
 
@@ -202,9 +213,145 @@ function notes(res){
   });
   const t = res.total;
   if(t.totalRows > t.totalOrders){
-    out.push(`<div class="os-note info">The files hold ${fmt(t.totalRows)} rows but only ${fmt(t.totalOrders)} distinct orders. The ${fmt(t.totalRows - t.totalOrders)} extra rows are partially shipped orders, which NetSuite reports as one row for the shipped portion and one for the unshipped. Each is counted once here.</div>`);
+    out.push(`<div class="os-note info"><strong>${fmt(t.partial)} orders are partially shipped</strong>, so NetSuite lists each of them twice &mdash; once for the part that shipped, once for the part that hasn't. That's why the files contain ${fmt(t.totalRows)} rows for ${fmt(t.totalOrders)} orders. Every order above is counted once.</div>`);
   }
   return out.join('');
+}
+
+
+const CHANNEL_ORDER_HINT = ['Shopify','Shopify B2B','EDI','Manual','Replacement Order','Retail','Amazon','BYLT HQ'];
+
+function channelTable(r, label){
+  if(!r || r.error || !r.byChannel) return '';
+  const rows = Object.entries(r.byChannel).sort((a,b)=>{
+    const d = (b[1].total || 0) - (a[1].total || 0);
+    if(d) return d;
+    return CHANNEL_ORDER_HINT.indexOf(a[0]) - CHANNEL_ORDER_HINT.indexOf(b[0]);
+  });
+  if(!rows.length) return '';
+
+  const tot = rows.reduce((a,[,v])=>({
+    fully:a.fully+v.fully, partial:a.partial+v.partial,
+    notStarted:a.notStarted+v.notStarted, total:a.total+v.total
+  }), {fully:0,partial:0,notStarted:0,total:0});
+
+  const body = rows.map(([name, v])=>`
+    <tr>
+      <td class="os-chan-name">${escapeHtml(name === '- None -' ? 'Not set' : name)}</td>
+      <td class="n" style="color:var(--green); font-weight:700;">${fmt(v.fully)}</td>
+      <td class="n" style="color:#b8730a; font-weight:700;">${fmt(v.partial)}</td>
+      <td class="n" style="color:var(--red); font-weight:700;">${fmt(v.notStarted)}</td>
+      <td class="n" style="color:var(--muted);">${fmt(v.total)}</td>
+    </tr>`).join('');
+
+  return `
+    <div class="os-section">
+      <h3>${label} by channel</h3>
+      <div class="os-section-sub">Channel read from the <strong>${escapeHtml(r.channelColumn || 'n/a')}</strong> column &middot; each order counted once</div>
+      <table class="os-chan-table">
+        <thead><tr>
+          <th>Channel</th><th class="n">Fully shipped</th><th class="n">Partial</th><th class="n">Not started</th><th class="n">Total</th>
+        </tr></thead>
+        <tbody>${body}</tbody>
+        <tfoot><tr>
+          <td>All channels</td>
+          <td class="n">${fmt(tot.fully)}</td>
+          <td class="n">${fmt(tot.partial)}</td>
+          <td class="n">${fmt(tot.notStarted)}</td>
+          <td class="n">${fmt(tot.total)}</td>
+        </tr></tfoot>
+      </table>
+    </div>`;
+}
+
+function shortDay(iso){
+  const d = new Date(iso + 'T00:00:00');
+  return isNaN(d.getTime()) ? iso : `${d.getMonth()+1}/${d.getDate()}`;
+}
+
+// Per-day counts of orders that finished shipping. Recent days only —
+// the tail of old dates isn't what anyone is looking at.
+function throughputChart(map, label, sub, days){
+  const n = days || 21;
+  const entries = Object.entries(map || {}).sort();
+  if(!entries.length) return `
+    <div class="os-section"><h3>${label}</h3><div class="placeholder">No fulfillment dates in this file.</div></div>`;
+  const slice = entries.slice(-n);
+  const max = Math.max(...slice.map(([,v])=>v), 1);
+  const cols = slice.map(([day, v])=>`
+    <div class="os-chart-col" title="${day}: ${fmt(v)}">
+      <div class="seg only" style="height:${Math.max((v / max) * 100, v > 0 ? 2 : 0)}%;"></div>
+    </div>`).join('');
+  const axis = slice.map(([day])=>`<div>${shortDay(day)}</div>`).join('');
+  const total = slice.reduce((a,[,v])=>a+v, 0);
+  const busiest = slice.reduce((a,b)=> b[1] > a[1] ? b : a);
+
+  return `
+    <div class="os-section">
+      <h3>${label}</h3>
+      <div class="os-section-sub">${sub}</div>
+      <div class="os-chart">
+        <div class="os-chart-cols">${cols}</div>
+        <div class="os-chart-axis">${axis}</div>
+      </div>
+      <div style="margin-top:12px; font-size:12.5px; color:var(--muted);">
+        ${fmt(total)} orders across these ${slice.length} days &middot;
+        busiest was ${shortDay(busiest[0])} at ${fmt(busiest[1])}
+      </div>
+    </div>`;
+}
+
+// Where the warehouse actually is: orders grouped by the day they were
+// placed, split into fully shipped vs still open. The point at which the
+// bars flip from green to red is the edge of the backlog.
+function backlogChart(res){
+  const map = res.backlog || {};
+  const today = new Date();
+  const pad = n => String(n).padStart(2,'0');
+  const todayIso = `${today.getFullYear()}-${pad(today.getMonth()+1)}-${pad(today.getDate())}`;
+
+  const all = Object.entries(map).sort();
+  const past = all.filter(([d])=> d <= todayIso);
+  const future = all.filter(([d])=> d > todayIso);
+  const slice = past.slice(-21);
+  if(!slice.length) return '';
+
+  const max = Math.max(...slice.map(([,v])=>v.shipped + v.open), 1);
+  const cut = res.caughtUpThrough ? res.caughtUpThrough.so : null;
+
+  const cols = slice.map(([day, v])=>{
+    const tot = v.shipped + v.open;
+    const mark = (cut && day === cut) ? ' os-chart-mark' : '';
+    return `
+      <div class="os-chart-col${mark}" title="${day} — shipped ${fmt(v.shipped)}, open ${fmt(v.open)}">
+        <div class="seg open" style="height:${(v.open / max) * 100}%;"></div>
+        <div class="seg ship" style="height:${(v.shipped / max) * 100}%;"></div>
+      </div>`;
+  }).join('');
+  const axis = slice.map(([day])=>`<div>${shortDay(day)}</div>`).join('');
+
+  const futureNote = future.length
+    ? `<div style="margin-top:10px; font-size:12px; color:var(--muted);">${fmt(future.reduce((a,[,v])=>a+v.open+v.shipped,0))} orders are dated in the future (pre-orders or backorders) and sit outside this chart.</div>`
+    : '';
+
+  return `
+    <div class="os-section">
+      <h3>Where the warehouse is</h3>
+      <div class="os-section-sub">Orders grouped by the day they were placed. Green is fully shipped, red is still open &mdash; the point where red takes over is the edge of the backlog.</div>
+      <div class="os-caught">
+        <span class="d">${cut ? shortDay(cut) : 'n/a'}</span>
+        <span class="t">${cut ? 'last order date that is 90%+ shipped &mdash; sales orders' : 'no day yet reaches 90% shipped'}</span>
+      </div>
+      <div class="os-chart" style="margin-top:12px;">
+        <div class="os-chart-cols">${cols}</div>
+        <div class="os-chart-axis">${axis}</div>
+      </div>
+      <div class="os-legend" style="margin-top:8px;">
+        <span><i style="background:#1a7f37;"></i>Fully shipped</span>
+        <span><i style="background:#d94a4a;"></i>Still open</span>
+      </div>
+      ${futureNote}
+    </div>`;
 }
 
 function render(){
@@ -254,6 +401,14 @@ function render(){
     </div>
 
     ${notes(current)}
+
+    ${backlogChart(current)}
+
+    ${channelTable(current.so, 'Sales orders')}
+    ${channelTable(current.to, 'Transfer orders')}
+
+    ${throughputChart(current.so && current.so.byFulfilledDay, 'Sales orders fulfilled per day', 'Counted on the day the order finished shipping, from the Date Fulfilled column.')}
+    ${throughputChart(current.to && current.to.byFulfilledDay, 'Transfer orders fulfilled per day', 'Counted on the day the order finished shipping, from the Date Fulfilled column.')}
   `;
 }
 
