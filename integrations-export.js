@@ -12,7 +12,7 @@
 (function(){
   const SYNC_HEADERS   = ['Order Number','NetSuite Internal ID','Order Date','Order Type','NetSuite Status','WMS Status'];
   const FULFIL_HEADERS = ['Order Number','NetSuite Internal ID','Avectous Ship Date','Order Date','NetSuite Status','WMS Status','Age'];
-  const ORPHAN_HEADERS = ['Order Number','Date','Order Type','Status','Channel'];
+  const ORPHAN_HEADERS = ['Order Number','Date','Order Type','Status','Channel','Found in','Kind'];
 
   function sheet(headers, rows){
     const s = XLSX.utils.aoa_to_sheet([headers, ...rows]);
@@ -59,6 +59,11 @@
       push(a.soFulfil.label, '', a.soFulfil.sameDay, a.soFulfil.overdue, '', 'SO Fulfillments Missing');
       push(a.toFulfil.label, '', a.toFulfil.sameDay, a.toFulfil.overdue, '', 'TO Fulfillments Missing');
       push();
+      push('THE OPPOSITE FAILURE', '', 'Orders', '', '', 'Sheet');
+      push('Fulfilled in NetSuite, no Avectous shipment', '',
+           (a.soFulfil.noShipRecord || 0) + (a.toFulfil.noShipRecord || 0), '', '', 'Fulfilled No AV Shipment');
+      push('', 'Either fulfilled by hand in NetSuite without the warehouse shipping, or Avectous shipped it and lost the record. Not included in queue health, because the denominator there is what Avectous shipped.');
+      push();
       push('WHAT TO LOOK AT FIRST');
       if(a.soFulfil.overdue || a.toFulfil.overdue){
         push('', (a.soFulfil.overdue + a.toFulfil.overdue).toLocaleString() +
@@ -75,6 +80,12 @@
       push('Avectous shipments', '', c.avShip);
       push('In Avectous only, no NetSuite match', '', current.orphans.sync.length + current.orphans.ship.length,
            '', '', 'Excluded from every percentage above');
+      push('  of which Avectous test orders', '', current.orphans.tests.length, '', '',
+           'Order numbers containing TEST - should not be in a production warehouse');
+      push('  of which created after the NetSuite pull', '', current.orphans.newer.length, '', '',
+           'Real orders Avectous is working. Timing, not a fault.');
+      const cancelledTotal = ['soSync','toSync','soFulfil','toFulfil'].reduce((n,k)=> n + (a[k].cancelled || 0), 0);
+      push('Cancelled, excluded', '', cancelledTotal, '', '', 'See the Cancelled Excluded sheet');
 
       const sum = XLSX.utils.aoa_to_sheet(S);
       sum['!cols'] = [{wch:36},{wch:22},{wch:14},{wch:12},{wch:11},{wch:30}];
@@ -102,8 +113,19 @@
       m('The 15-minute queue window');
       m('', 'Anything Avectous shipped on its most recent day is reported as "shipped today" rather than counted as a failure. Everything older is overdue.');
       m();
+      m('Fulfilled in NetSuite, no Avectous shipment');
+      m('', 'The mirror of the main failure. NetSuite has an Item Fulfillment but the Avectous shipments report has no record of the order at all.');
+      m('', 'Reported separately and never inside queue health, because the denominator there is what Avectous shipped - an order Avectous has no record of cannot belong in it.');
+      m('', 'These need chasing from the NetSuite end. Check whether the fulfillment was created manually, and whether WMS Status was ever updated.');
+      m();
+      m('Cancelled orders');
+      m('', 'Excluded from every percentage. An order is treated as cancelled when its WMS Status is Pending Cancellation, Cancellation Confirmed or Cancellation Failed, or when its NetSuite Status is Closed.');
+      m('', 'CX is actively trying to stop these orders, so a missing sync is not a queue fault and an unshipped order is not warehouse backlog. They are listed on the Cancelled Excluded sheet so nothing is hidden.');
+      m();
       m('Orders only Avectous has');
-      m('', 'Listed on their own sheets and never included in a health percentage. Usually test orders, or orders created after the NetSuite export was pulled.');
+      m('', 'Never included in a health percentage. Two different things end up here, so the Kind column separates them:');
+      m('', 'Avectous test order - the order number contains TEST. These should not exist in a production warehouse.');
+      m('', 'Created after the NetSuite pull - a real order Avectous is working correctly. The NetSuite snapshot is simply older. Not a fault in either system.');
       m();
       m('How to verify any figure');
       m('1', 'Open a detail sheet. Every row is one order, and the order number never repeats.');
@@ -117,7 +139,28 @@
       add(wb, 'TO Sync Missing',         sheet(SYNC_HEADERS,   a.toSync.rows));
       add(wb, 'SO Fulfillments Missing', sheet(FULFIL_HEADERS, a.soFulfil.rows));
       add(wb, 'TO Fulfillments Missing', sheet(FULFIL_HEADERS, a.toFulfil.rows));
-      add(wb, 'In Avectous Only',        sheet(ORPHAN_HEADERS, current.orphans.sync.concat(current.orphans.ship)));
+      const testSet = new Set(current.orphans.tests.map(r => r[0]));
+      const orphanRows = current.orphans.sync.concat(current.orphans.ship)
+        .map(r => r.concat([ testSet.has(r[0]) ? 'Avectous test order' : 'Created after the NetSuite pull' ]));
+      add(wb, 'In Avectous Only', sheet(ORPHAN_HEADERS, orphanRows));
+
+      // Cancelled orders, deduplicated across the four audits.
+      const seenC = new Set(); const cancelledRows = [];
+      [['soSync','Sales order'],['toSync','Transfer order'],['soFulfil','Sales order'],['toFulfil','Transfer order']].forEach(([k,type])=>{
+        (a[k].cancelledRows || []).forEach(r=>{
+          if(seenC.has(r[0])) return;
+          seenC.add(r[0]);
+          cancelledRows.push([r[0], r[1], type, r[2] || '', r[4] || '', r[5] || '']);
+        });
+      });
+      const noShipRows = []
+        .concat((a.soFulfil.noShipRecordRows || []).map(r => r.concat(['Sales order'])))
+        .concat((a.toFulfil.noShipRecordRows || []).map(r => r.concat(['Transfer order'])));
+      add(wb, 'Fulfilled No AV Shipment',
+        sheet(['Order Number','NetSuite Internal ID','Order Date','NetSuite Status','WMS Status','Order Type','Record'], noShipRows));
+
+      add(wb, 'Cancelled Excluded',
+        sheet(['Order Number','NetSuite Internal ID','Order Type','Date','NetSuite Status','WMS Status'], cancelledRows));
 
       const d = new Date();
       const pad = n => String(n).padStart(2,'0');

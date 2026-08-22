@@ -1,14 +1,14 @@
-BYLT dashboard -- update 6: Integrations Status tab
-===================================================
+BYLT dashboard -- update 9
+==========================
 
 UPLOAD THESE 9 FILES to your GitHub repo, replacing existing ones:
 
-    integrations.html          <- NEW
-    integrations-export.js     <- NEW
-    index.html                 (nav only)
-    integration-health.html    (nav only)
-    load-data.html             (nav only)
-    totals.html                (nav only)
+    integrations.html
+    integrations-export.js
+    index.html
+    integration-health.html
+    load-data.html
+    totals.html
     app.js
     style.css
     README.md
@@ -18,61 +18,38 @@ Then Netlify -> Deploys -> Trigger deploy.
 
 (Do NOT upload this START-HERE.txt.)
 
-This includes update 5, so if you have not uploaded that yet,
-this covers it.
+Includes updates 5 through 8.
 
 
-THE NEW TAB
------------
-Integrations Status. Four uploads:
-  1. NetSuite sales orders     (search 4866)
-  2. NetSuite transfer orders  (search 4867)
-  3. Avectous Orders           (the one with a Status column)
-  4. Avectous Shipments        (the one with LastShipDate)
+WHAT CHANGED
+------------
+"In Avectous only" is now split into two rows, because two very
+different things were in that bucket:
 
-Four audit cards, colour-coded, then an "Export comparison"
-button that builds the workbook for Chris and Avectous.
+  Avectous test orders              14
+  Created after the NetSuite pull  182
 
+TEST ORDERS are order numbers containing "TEST":
+    SHPYTEST31, SHPYTEST32, GOLIVETEST36 ...
+These should not be in a production warehouse. The tab shows a
+red callout for them. GOLIVETEST36 looks like a leftover from
+cutover testing.
 
-WHAT IT FOUND
--------------
-  Sales order sync            98.69%     263 missing
-  Transfer order sync         99.77%       4 missing
-  Sales order fulfillments    78.73%   3,126 missing
-  Transfer order fulfillments 49.88%     205 missing
+CREATED AFTER THE PULL are real Shopify orders numbered higher
+than anything in your NetSuite export, dated up to 8/21. Avectous
+is working them correctly -- your NetSuite file is just older.
+Nothing wrong, so they are shown in grey, not red.
 
-Orders going OUT to Avectous are fine.
-Ship confirmations coming BACK are not.
-
-Of the 3,126 missing sales-order fulfillments, only 59 shipped
-on the latest Avectous day. The other 3,067 shipped earlier and
-have had far longer than the 15-minute queue interval.
-
-
-WHY THE DIRECTION MATTERS
--------------------------
-Order sync is measured NetSuite -> Avectous.
-Fulfillments are measured Avectous -> NetSuite.
-
-Measuring fulfillments the other way -- taking orders NetSuite
-already fulfilled and asking whether Avectous agrees -- gives
-99.78% and is meaningless. An order NetSuite never fulfilled
-cannot appear in that sample, so every real failure is excluded
-by construction.
-
-Same data, correct direction: 78.73%.
+Both were previously counted together as one number, which hid
+the test pollution behind a timing artefact.
 
 
 THE EXPORT
 ----------
-Seven sheets:
-  Summary                    for Chris
-  Method                     why the directions differ
-  SO Sync Missing            263 rows
-  TO Sync Missing              4 rows
-  SO Fulfillments Missing  3,126 rows  <- send to Avectous
-  TO Fulfillments Missing    205 rows  <- send to Avectous
-  In Avectous Only           196 rows  (test orders etc.)
+The "In Avectous Only" sheet has two new columns:
 
-Every detail sheet is one row per order, filterable, with an
-Age column marking each as Today or Overdue.
+    Found in   -- Order download or Shipments
+    Kind       -- Avectous test order / Created after the NetSuite pull
+
+Filter Kind to "Avectous test order" and that is the list to
+send Avectous asking them to clear it.

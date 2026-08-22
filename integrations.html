@@ -102,6 +102,20 @@
             never fulfilled can't appear in that sample, so every real failure is excluded by construction.
           </div>
 
+          <strong style="display:block; margin-top:11px;">Fulfilled in NetSuite, no Avectous shipment</strong>
+          <div style="margin-top:4px;">
+            Counted and listed separately, never inside queue health — the denominator there is what
+            Avectous shipped, so an order Avectous has no record of cannot belong in it. These are the
+            mirror failure and need chasing from the NetSuite end rather than Avectous's.
+          </div>
+
+          <strong style="display:block; margin-top:11px;">Cancelled orders are excluded</strong>
+          <ol>
+            <li>Any order whose <code>WMS Status</code> is Pending Cancellation, Cancellation Confirmed or Cancellation Failed.</li>
+            <li>Any order whose NetSuite <code>Status</code> is Closed.</li>
+            <li>CX is trying to stop these, so a missing sync is not a queue fault. Excluded from every percentage and listed on their own sheet in the export.</li>
+          </ol>
+
           <strong style="display:block; margin-top:11px;">Matching</strong>
           <ol>
             <li>Sales orders match on <code>PO/Check Number</code> against Avectous <code>OrderNumber</code>.</li>
@@ -248,14 +262,23 @@ function auditCard(a, isFulfil){
         <div class="ig-line"><span class="k">${totalLabel}</span><span class="v">${fmt(a.total)}</span></div>
         <div class="ig-line"><span class="k">${matchLabel}</span><span class="v">${fmt(a.matched)}</span></div>
         <div class="ig-line"><span class="k">Missing</span><span class="v ${a.missing ? 'bad' : ''}">${fmt(a.missing)}</span></div>
+        ${a.cancelled ? `<div class="ig-line"><span class="k">Cancelled, excluded</span><span class="v" style="color:var(--muted);">${fmt(a.cancelled)}</span></div>` : ''}
         ${isFulfil && a.missing ? `
         <div class="ig-line"><span class="k">&nbsp;&nbsp;shipped today</span><span class="v warn">${fmt(a.sameDay)}</span></div>
         <div class="ig-line"><span class="k">&nbsp;&nbsp;overdue</span><span class="v bad">${fmt(a.overdue)}</span></div>` : ''}
+        ${isFulfil && a.noShipRecord ? `
+        <div class="ig-line"><span class="k">Fulfilled in NetSuite, no Avectous shipment</span><span class="v warn">${fmt(a.noShipRecord)}</span></div>` : ''}
       </div>
       ${isFulfil && a.overdue > 0 ? `
       <div class="ig-flag">
         <strong>${fmt(a.overdue)} orders shipped on an earlier day and still have no fulfillment in NetSuite.</strong>
         The queue runs every 15 minutes, so these have had far longer than one cycle to come through.
+      </div>` : ''}
+      ${isFulfil && a.noShipRecord > 0 ? `
+      <div class="ig-flag mild">
+        <strong>${fmt(a.noShipRecord)} orders have a fulfillment in NetSuite but no shipment record in Avectous.</strong>
+        The opposite failure — either fulfilled by hand in NetSuite without the warehouse shipping, or
+        Avectous shipped it and lost the record. Own sheet in the export.
       </div>` : ''}
       ${!isFulfil && a.missing > 0 ? `
       <div class="ig-flag mild">${fmt(a.missing)} orders exist in NetSuite but not in the Avectous download.</div>` : ''}
@@ -294,10 +317,28 @@ function render(){
     <div class="os-section">
       <h3>In Avectous only</h3>
       <div class="os-section-sub">
-        ${fmt(current.orphans.sync.length)} in the order download and ${fmt(current.orphans.ship.length)} in
-        shipments have no match in either NetSuite search. Usually test orders, or orders created after the
-        NetSuite export was pulled. Kept out of every percentage above, and listed in the export.
+        ${fmt(orphanTotal)} orders have no match in either NetSuite search. Kept out of every percentage above.
       </div>
+      <table class="os-chan-table">
+        <thead><tr><th>What they are</th><th class="n">Orders</th><th>What to do</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="os-chan-name">Avectous test orders</td>
+            <td class="n" style="color:var(--red); font-weight:700;">${fmt(current.orphans.tests.length)}</td>
+            <td style="color:var(--muted);">Order numbers containing "TEST". These shouldn't be in a production warehouse &mdash; ask Avectous to clear them.</td>
+          </tr>
+          <tr>
+            <td class="os-chan-name">Created after the NetSuite pull</td>
+            <td class="n" style="color:var(--muted); font-weight:700;">${fmt(current.orphans.newer.length)}</td>
+            <td style="color:var(--muted);">Real orders Avectous is working. The NetSuite export is simply older &mdash; nothing wrong.</td>
+          </tr>
+        </tbody>
+      </table>
+      ${current.orphans.tests.length ? `
+      <div class="ig-flag" style="margin-left:0;">
+        <strong>${fmt(current.orphans.tests.length)} test orders are sitting in the production Avectous warehouse.</strong>
+        Listed on the "In Avectous Only" sheet of the export with a Kind column.
+      </div>` : ''}
     </div>` : ''}
   `;
 }

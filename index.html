@@ -82,6 +82,14 @@
             <li>Transfer orders key on Internal ID too; <code>Document Number</code> gives the same answer.</li>
           </ol>
 
+          <strong style="display:block; margin-top:11px;">Cancelled orders are excluded</strong>
+          <ol>
+            <li>Any order whose <code>WMS Status</code> is Pending Cancellation, Cancellation Confirmed or Cancellation Failed.</li>
+            <li>Any order whose NetSuite <code>Status</code> is Closed.</li>
+            <li>CX is actively trying to stop these, so counting them as warehouse backlog blames the warehouse for orders nobody wants shipped.</li>
+            <li>The excluded count is shown on each card and every one appears in the export ledger with state "cancelled".</li>
+          </ol>
+
           <strong style="display:block; margin-top:11px;">Shipped vs not shipped</strong>
           <ol>
             <li><strong>Shipped</strong> &mdash; any line marked Fulfilled, including partially shipped orders.</li>
@@ -259,7 +267,7 @@ function sideCard(r, label, bn){
         <span class="os-card-meta">${fmt(r.totalRows)} rows in file</span>
       </div>
       <div class="os-big">${fmt(r.totalOrders)}</div>
-      <div class="os-big-sub">distinct orders</div>
+      <div class="os-big-sub">distinct orders${r.cancelled ? ` &middot; ${fmt(r.cancelled)} cancelled excluded` : ''}</div>
       <div class="os-row"><span class="lbl">Shipped</span><span class="num" style="color:var(--green);">${fmt(r.shipped)} <span style="color:var(--muted); font-weight:400;">(${pct.toFixed(1)}%)</span></span></div>
       <div class="os-row"><span class="lbl">Not shipped</span><span class="num" style="color:var(--red);">${fmt(r.notShipped)}</span></div>
       ${sla !== null ? `<div class="os-row"><span class="lbl">Typical time to ship</span><span class="num">${sla} ${sla === 1 ? 'day' : 'days'}</span></div>` : ''}
@@ -348,7 +356,7 @@ function ledgerSheet(side, label){
   if(!side || side.error || !side.ledger || !side.ledger.length) return null;
   const body = side.ledger.map(r=>[
     r[0], r[1], r[2], r[3], r[4] === '- None -' ? 'Not set' : r[4],
-    r[5] === 'shipped' ? 'Shipped' : r[5] === 'notShipped' ? 'Not shipped' : 'Unknown',
+    r[5] === 'shipped' ? 'Shipped' : r[5] === 'notShipped' ? 'Not shipped' : r[5] === 'cancelled' ? 'Cancelled' : 'Unknown',
     r[6] ? 'Yes' : '', r[7] === null ? '' : r[7], r[8] === null ? '' : r[8], r[9]
   ]);
   return XLSX.utils.aoa_to_sheet([LEDGER_HEADERS, ...body]);
@@ -479,6 +487,7 @@ function render(){
       <div class="os-legend">
         <span><i style="background:#1a7f37;"></i>Shipped ${fmt(t.shipped)}</span>
         <span><i style="background:#c22a2a;"></i>Not shipped ${fmt(t.notShipped)}</span>
+        ${t.cancelled ? `<span style="color:var(--muted);">${fmt(t.cancelled)} cancelled, excluded</span>` : ''}
       </div>
     </div>
 

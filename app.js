@@ -1137,6 +1137,27 @@ function computeComparison(s, nsData, avData, mapping, supplementaryData){
    if every one of its rows says Fulfilled; "Not started" only if
    every row says Unfulfilled; "Partial" if it has both.
 =========================================================== */
+// Orders in a cancellation state are not warehouse work and not sync
+// failures — CX is actively trying to stop them. Counting them as backlog
+// blames the warehouse for orders nobody wants shipped, and counting them
+// as missing from Avectous flags a queue fault where none exists.
+//
+//   Pending Cancellation   — CX has asked Avectous to cancel
+//   Cancellation Confirmed — Avectous agreed it can be cancelled
+//   Cancellation Failed    — Avectous could not cancel it
+//   Closed (NetSuite)      — cancelled outright
+//
+// Excluded everywhere, and always reported as a count so the exclusion is
+// visible rather than silently shrinking the totals.
+const CANCELLED_WMS_STATUSES = ['Pending Cancellation','Cancellation Confirmed','Cancellation Failed'];
+const CANCELLED_NS_STATUSES  = ['Closed'];
+
+function isCancelled(wmsValue, statusValue){
+  const w = norm(wmsValue), t = norm(statusValue);
+  return CANCELLED_WMS_STATUSES.some(x => norm(x) === w) ||
+         CANCELLED_NS_STATUSES.some(x => norm(x) === t);
+}
+
 const ORDER_STATUS = {
   id:'order_status',
   title:'Order Status — 810 Texas DC',
@@ -1198,6 +1219,8 @@ function computeOrderStatusSide(data, cfg){
   const chanCol   = guessColumn(data.headers, cfg.channelField);
   const fulDateCol= guessColumn(data.headers, cfg.fulfilledDateField);
   const docCol    = guessColumn(data.headers, cfg.docField);
+  const wmsCol    = guessColumn(data.headers, ['WMS Status']);
+  const nsStCol   = guessColumn(data.headers, ['Status']);
 
   if(!keyCol || !statusCol){
     return {
@@ -1217,8 +1240,11 @@ function computeOrderStatusSide(data, cfg){
     if(!key) return;
     let o = orders.get(key);
     if(!o){
-      o = { f:false, u:false, rows:0, orderDay:null, fulfilledDay:null, channel:null, doc:null };
+      o = { f:false, u:false, rows:0, orderDay:null, fulfilledDay:null, channel:null, doc:null, cancelled:false };
       orders.set(key, o);
+    }
+    if(!o.cancelled && isCancelled(wmsCol ? row[wmsCol] : '', nsStCol ? row[nsStCol] : '')){
+      o.cancelled = true;
     }
     o.rows++;
 
@@ -1247,7 +1273,7 @@ function computeOrderStatusSide(data, cfg){
   const todayIso = isoToday();
   const dayDiff = (a, b) => Math.round((Date.parse(b + 'T00:00:00') - Date.parse(a + 'T00:00:00')) / 86400000);
 
-  let shipped = 0, notShipped = 0, partial = 0, unknown = 0;
+  let shipped = 0, notShipped = 0, partial = 0, unknown = 0, cancelled = 0;
   const byChannel = {};
   const byOrderDay = {};
   const byFulfilledDay = {};
@@ -1256,6 +1282,12 @@ function computeOrderStatusSide(data, cfg){
   const ledger = [];
 
   orders.forEach((o, key)=>{
+    if(o.cancelled){
+      cancelled++;
+      ledger.push([key, o.doc || '', o.orderDay || '', o.fulfilledDay || '',
+                   o.channel || BLANK, 'cancelled', 0, null, null, o.rows]);
+      return;
+    }
     let state;
     if(o.f){ state = 'shipped'; shipped++; if(o.u) partial++; }
     else if(o.u){ state = 'notShipped'; notShipped++; }
@@ -1302,7 +1334,9 @@ function computeOrderStatusSide(data, cfg){
     dateColumn: dateCol || null,
     fulfilledDateColumn: fulDateCol || null,
     totalRows: data.rows.length,
-    totalOrders: orders.size,
+    totalOrders: orders.size - cancelled,
+    ordersInFile: orders.size,
+    cancelled,
     shipped, notShipped, partial, unknown,
     byChannel, byOrderDay, byFulfilledDay,
     sla: summariseDays(slaDays, SLA_BUCKETS),
@@ -1310,7 +1344,7 @@ function computeOrderStatusSide(data, cfg){
     ledger,
     duplicateRowCount: data.rows.length - orders.size,
     unrecognisedStatuses: [...unrecognised].slice(0, 20),
-    reconciles: (shipped + notShipped + unknown) === orders.size
+    reconciles: (shipped + notShipped + unknown + cancelled) === orders.size
   };
 }
 
@@ -1401,6 +1435,7 @@ function computeOrderStatus(soData, toData){
     total:{
       totalOrders: sum(so, to, 'totalOrders'),
       totalRows:   sum(so, to, 'totalRows'),
+      cancelled:   sum(so, to, 'cancelled'),
       shipped:     sum(so, to, 'shipped'),
       partial:     sum(so, to, 'partial'),
       notShipped:  sum(so, to, 'notShipped'),
@@ -1500,8 +1535,12 @@ function nsOrderIndex(data, keyField){
             orderDay: dtCol ? isoDay(row[dtCol]) : null,
             status: statusCol ? String(row[statusCol] ?? '').trim() : '',
             wms: wmsCol ? String(row[wmsCol] ?? '').trim() : '',
-            type: typeCol ? String(row[typeCol] ?? '').trim() : '' };
+            type: typeCol ? String(row[typeCol] ?? '').trim() : '',
+            cancelled:false };
       byKey.set(k, o);
+    }
+    if(!o.cancelled && isCancelled(wmsCol ? row[wmsCol] : '', statusCol ? row[statusCol] : '')){
+      o.cancelled = true;
     }
     if(norm(row[stCol]) === norm('Fulfilled')) o.fulfilled = true;
   });
@@ -1555,27 +1594,47 @@ function computeIntegrations(soData, toData, syncData, shipData){
 
   // NetSuite -> Avectous. Every order NetSuite holds should be in the download.
   function syncAudit(nsSide, label){
-    const missing = [];
-    let matched = 0;
+    const missing = [], cancelledRows = [];
+    let matched = 0, total = 0;
     nsSide.byKey.forEach(o=>{
+      // A cancelled order is not a sync failure — CX is trying to stop it.
+      if(o.cancelled){
+        cancelledRows.push([o.key, o.id, o.orderDay || '', o.type, o.status, o.wms]);
+        return;
+      }
+      total++;
       if(av.sync.byKey.has(o.key)) matched++;
       else missing.push([o.key, o.id, o.orderDay || '', o.type, o.status, o.wms]);
     });
-    const total = nsSide.byKey.size;
     missing.sort((a,b)=> String(a[2]).localeCompare(String(b[2])));
     return { label, direction:'NetSuite \u2192 Avectous', total, matched,
-             missing: missing.length, health: pctOf(matched, total), rows: missing };
+             missing: missing.length, cancelled: cancelledRows.length, cancelledRows,
+             health: pctOf(matched, total), rows: missing };
   }
 
   // Avectous -> NetSuite. Every order Avectous shipped should have a
   // fulfillment in NetSuite. Anything shipped before today has had far
   // longer than the queue interval to arrive.
   function fulfilAudit(nsSide, label){
-    const missing = [];
+    const missing = [], cancelledRows = [], noShipRecord = [];
     let shipped = 0, recorded = 0, sameDay = 0;
     nsSide.byKey.forEach(o=>{
       const a = av.ship.byKey.get(o.key);
-      if(!a) return;
+      if(!a){
+        // NetSuite created a fulfillment but Avectous has no shipment for it.
+        // The mirror of the main failure: either someone fulfilled by hand in
+        // NetSuite without the warehouse shipping, or Avectous shipped it and
+        // lost the record. Reported separately, never inside queue health,
+        // because the denominator here is what Avectous shipped.
+        if(o.fulfilled && !o.cancelled){
+          noShipRecord.push([o.key, o.id, o.orderDay || '', o.status, o.wms, o.type]);
+        }
+        return;
+      }
+      if(o.cancelled){
+        cancelledRows.push([o.key, o.id, a.day || '', o.orderDay || '', o.status, o.wms, 'Cancelled']);
+        return;
+      }
       shipped++;
       if(o.fulfilled){ recorded++; return; }
       const isToday = a.day && a.day >= today;
@@ -1583,16 +1642,37 @@ function computeIntegrations(soData, toData, syncData, shipData){
       missing.push([o.key, o.id, a.day || '', o.orderDay || '', o.status, o.wms, isToday ? 'Today' : 'Overdue']);
     });
     missing.sort((a,b)=> String(a[2]).localeCompare(String(b[2])));
+    noShipRecord.sort((a,b)=> String(a[2]).localeCompare(String(b[2])));
     return { label, direction:'Avectous \u2192 NetSuite', total: shipped, matched: recorded,
              missing: missing.length, overdue: missing.length - sameDay, sameDay,
+             cancelled: cancelledRows.length, cancelledRows,
+             noShipRecord: noShipRecord.length, noShipRecordRows: noShipRecord,
              health: pctOf(recorded, shipped), rows: missing };
   }
 
   // Anything Avectous holds that neither NetSuite search knows about.
+  // Two very different things end up here and they need separating:
+  //
+  //   TEST      — an order number containing TEST. Avectous's own test data,
+  //               which should never have reached a production warehouse.
+  //   NEWER     — a real order created after the NetSuite export was pulled.
+  //               Avectous is working it correctly; the NetSuite snapshot is
+  //               simply older. Not a fault in either system.
+  //
+  // Lumping them together makes test pollution invisible behind a timing
+  // artefact, so each is counted and exported on its own.
   const nsKeys = new Set([...ns.so.byKey.keys(), ...ns.to.byKey.keys()]);
-  const orphans = { sync: [], ship: [] };
-  av.sync.byKey.forEach(o=>{ if(!nsKeys.has(o.key)) orphans.sync.push([o.key, o.day || '', o.type, o.status, o.channel]); });
-  av.ship.byKey.forEach(o=>{ if(!nsKeys.has(o.key)) orphans.ship.push([o.key, o.day || '', o.type, o.status, o.channel]); });
+  const isTestOrder = k => /test/i.test(k);
+  const orphans = { sync: [], ship: [], tests: [], newer: [] };
+
+  function classifyOrphan(o, source){
+    const row = [o.key, o.day || '', o.type, o.status, o.channel, source];
+    if(isTestOrder(o.key)) orphans.tests.push(row);
+    else orphans.newer.push(row);
+    return row;
+  }
+  av.sync.byKey.forEach(o=>{ if(!nsKeys.has(o.key)) orphans.sync.push(classifyOrphan(o, 'Order download')); });
+  av.ship.byKey.forEach(o=>{ if(!nsKeys.has(o.key)) orphans.ship.push(classifyOrphan(o, 'Shipments')); });
 
   return {
     computedAt: new Date().toISOString(),

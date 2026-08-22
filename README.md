@@ -135,6 +135,34 @@ interval. All sit at Pending Fulfillment in NetSuite with WMS Status also
 Pending Fulfillment, so NetSuite has no idea the warehouse touched them.
 Verified against `#55635919`, which has no Item Fulfillment in NetSuite.
 
+### Fulfilled in NetSuite, no Avectous shipment
+
+The mirror of the main failure: NetSuite has an Item Fulfillment but the
+Avectous shipments report has no record of the order at all. Either it was
+fulfilled by hand in NetSuite without the warehouse shipping, or Avectous
+shipped it and lost the record.
+
+Reported as its own line on each fulfillment card and its own export sheet,
+never inside queue health — the denominator there is what Avectous shipped, so
+an order Avectous has no record of cannot belong in it.
+
+On the 21 Aug data: 18 sales orders and 4 transfer orders. Most are `Billed`,
+so they have already been invoiced, and several still carry
+`WMS Status = Pending Fulfillment`, meaning NetSuite created a fulfillment the
+warehouse never confirmed. These need chasing from the NetSuite end.
+
+### Cancelled orders are excluded everywhere
+
+An order counts as cancelled when its `WMS Status` is Pending Cancellation,
+Cancellation Confirmed or Cancellation Failed, or when its NetSuite `Status` is
+Closed. CX is actively trying to stop these, so counting them as warehouse
+backlog blames the warehouse for orders nobody wants shipped, and counting them
+as missing from Avectous flags a queue fault where none exists.
+
+98 sales orders and 7 transfer orders on the 21 Aug data. Excluded from every
+percentage on both tabs, always reported as a visible count, and listed in full
+on the Cancelled Excluded sheet of the export.
+
 ### Matching and exclusions
 
 Sales orders match on `PO/Check Number`, transfer orders on `Document Number`,
@@ -142,9 +170,18 @@ both against Avectous `OrderNumber`. Avectous mixes both order types into one
 export, so each NetSuite search is matched against the whole file rather than
 trusting `OrderType`.
 
-Orders present only in Avectous (171 in the order download, 25 in shipments)
-are listed separately and never included in a health percentage — they are
-typically test orders or orders created after the NetSuite export was pulled.
+Orders present only in Avectous are listed separately and never included in a
+health percentage. Two different things end up here and the tab separates them:
+
+- **Avectous test orders** — the order number contains TEST (`SHPYTEST31`,
+  `GOLIVETEST36`). These should not exist in a production warehouse. 14 on the
+  21 Aug data, including a leftover from go-live testing.
+- **Created after the NetSuite pull** — real orders Avectous is working
+  correctly; the NetSuite snapshot is simply older. 182 on the same data,
+  mostly Shopify orders numbered above anything in the NetSuite export.
+
+Lumping them together hides test pollution behind a timing artefact, which is
+why the export carries a Kind column.
 
 ### The export
 
