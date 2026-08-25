@@ -1,5 +1,5 @@
-BYLT dashboard -- update 9
-==========================
+BYLT dashboard -- update 10
+===========================
 
 UPLOAD THESE 9 FILES to your GitHub repo, replacing existing ones:
 
@@ -18,38 +18,62 @@ Then Netlify -> Deploys -> Trigger deploy.
 
 (Do NOT upload this START-HERE.txt.)
 
-Includes updates 5 through 8.
+Includes updates 5 through 9.
 
 
-WHAT CHANGED
-------------
-"In Avectous only" is now split into two rows, because two very
-different things were in that bucket:
-
-  Avectous test orders              14
-  Created after the NetSuite pull  182
-
-TEST ORDERS are order numbers containing "TEST":
-    SHPYTEST31, SHPYTEST32, GOLIVETEST36 ...
-These should not be in a production warehouse. The tab shows a
-red callout for them. GOLIVETEST36 looks like a leftover from
-cutover testing.
-
-CREATED AFTER THE PULL are real Shopify orders numbered higher
-than anything in your NetSuite export, dated up to 8/21. Avectous
-is working them correctly -- your NetSuite file is just older.
-Nothing wrong, so they are shown in grey, not red.
-
-Both were previously counted together as one number, which hid
-the test pollution behind a timing artefact.
-
-
-THE EXPORT
+WHAT'S NEW
 ----------
-The "In Avectous Only" sheet has two new columns:
+"How far back is the warehouse caught up?" -- one section for
+sales orders, one for transfer orders. Sits above the channel
+tables.
 
-    Found in   -- Order download or Shipments
-    Kind       -- Avectous test order / Created after the NetSuite pull
+One row per day. Each row shows what share of the orders due
+that day have shipped, plus how many are still open.
 
-Filter Kind to "Avectous test order" and that is the list to
-send Avectous asking them to clear it.
+Three headline numbers:
+    caught up through    8/10
+    where it falls off   8/17  (drops 44.4 points in a day)
+    orders open since    12,189
+
+A dashed line marks where it stops being clean. A solid red
+line marks the cliff. Both are calculated, not typed in.
+
+
+WHY THIS IS DIFFERENT FROM "SHIPPED PER DAY"
+--------------------------------------------
+They answer opposite questions and they disagree:
+
+  Shipped per day says the warehouse got 2,136 orders out
+  the door on 8/19 -- their best day.
+
+  This new section says orders DUE on 8/19 are 0.1% shipped.
+
+Both are true. The warehouse is working flat out on old
+orders and never reaching the new ones. Throughput alone
+would have said everything was fine.
+
+
+GROUPING
+--------
+By Ship Date, never earlier than the order date.
+
+Ship Date, because a prebook placed in March with an August
+ship date is due in August -- not five months late. That alone
+moves 38 orders out of March.
+
+Floored at the order date, because a replacement order
+inherits the original's ship date. Without the floor, an order
+CX creates on the 21st carrying a ship date of the 8th would
+look two weeks late the instant it exists.
+
+
+NUMBERS MATCH YOUR MANUAL WORK
+------------------------------
+    8/11  82.3%   249 open
+    8/12  81.0%   264 open
+    8/13  74.4%   342 open
+    8/14  68.6%   422 open
+    8/15  66.7%   449 open
+    8/16  61.0%   572 open
+    8/17  16.6% 1,086 open
+    8/18  13.5% 1,113 open

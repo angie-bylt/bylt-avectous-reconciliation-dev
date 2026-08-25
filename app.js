@@ -1171,7 +1171,8 @@ const ORDER_STATUS = {
     dateField:['Date'],
     channelField:['Order Type','Channel'],
     fulfilledDateField:['Date Fulfilled'],
-    docField:['PO/Check Number']
+    docField:['PO/Check Number'],
+    shipByField:['Ship Date','Ship by Date']
   },
   to:{
     label:'Fulfillable Transfer Orders',
@@ -1183,7 +1184,8 @@ const ORDER_STATUS = {
     dateField:['Date'],
     channelField:['Channel','To Location'],
     fulfilledDateField:['Date Fulfilled'],
-    docField:['Document Number']
+    docField:['Document Number'],
+    shipByField:['Ship Date','Ship by Date']
   },
   fulfilledValue:'Fulfilled',
   unfulfilledValue:'Unfulfilled'
@@ -1221,6 +1223,7 @@ function computeOrderStatusSide(data, cfg){
   const docCol    = guessColumn(data.headers, cfg.docField);
   const wmsCol    = guessColumn(data.headers, ['WMS Status']);
   const nsStCol   = guessColumn(data.headers, ['Status']);
+  const shipByCol = guessColumn(data.headers, cfg.shipByField);
 
   if(!keyCol || !statusCol){
     return {
@@ -1240,7 +1243,7 @@ function computeOrderStatusSide(data, cfg){
     if(!key) return;
     let o = orders.get(key);
     if(!o){
-      o = { f:false, u:false, rows:0, orderDay:null, fulfilledDay:null, channel:null, doc:null, cancelled:false };
+      o = { f:false, u:false, rows:0, orderDay:null, shipByDay:null, fulfilledDay:null, channel:null, doc:null, cancelled:false };
       orders.set(key, o);
     }
     if(!o.cancelled && isCancelled(wmsCol ? row[wmsCol] : '', nsStCol ? row[nsStCol] : '')){
@@ -1260,6 +1263,7 @@ function computeOrderStatusSide(data, cfg){
     else if(st) unrecognised.add(String(row[statusCol]).trim());
 
     if(dateCol && !o.orderDay) o.orderDay = isoDay(row[dateCol]);
+    if(shipByCol && !o.shipByDay) o.shipByDay = isoDay(row[shipByCol]);
     if(docCol && !o.doc){
       const dv = String(row[docCol] ?? '').trim();
       if(dv) o.doc = dv;
@@ -1273,7 +1277,23 @@ function computeOrderStatusSide(data, cfg){
   const todayIso = isoToday();
   const dayDiff = (a, b) => Math.round((Date.parse(b + 'T00:00:00') - Date.parse(a + 'T00:00:00')) / 86400000);
 
+  // Which day an order belongs to on the backlog view.
+  //
+  // Ship Date rather than order date, because a prebook placed in March with
+  // an August ship date is due in August, not five months overdue.
+  //
+  // But floored at the order date: a replacement order inherits the original's
+  // ship date, so an order created on the 21st can carry a ship date of the
+  // 8th. Left alone that would show as two weeks late the moment CX creates
+  // it, and would dirty days that are otherwise clean.
+  const dueDay = o => {
+    if(!o.shipByDay) return o.orderDay;
+    if(!o.orderDay) return o.shipByDay;
+    return o.shipByDay > o.orderDay ? o.shipByDay : o.orderDay;
+  };
+
   let shipped = 0, notShipped = 0, partial = 0, unknown = 0, cancelled = 0;
+  const byDueDay = {};
   const byChannel = {};
   const byOrderDay = {};
   const byFulfilledDay = {};
@@ -1303,6 +1323,13 @@ function computeOrderStatusSide(data, cfg){
       if(!byOrderDay[o.orderDay]) byOrderDay[o.orderDay] = { shipped:0, open:0 };
       if(state === 'shipped') byOrderDay[o.orderDay].shipped++;
       else byOrderDay[o.orderDay].open++;
+    }
+    const due = dueDay(o);
+    if(due){
+      if(!byDueDay[due]) byDueDay[due] = { total:0, shipped:0, open:0 };
+      byDueDay[due].total++;
+      if(state === 'shipped') byDueDay[due].shipped++;
+      else byDueDay[due].open++;
     }
     if(o.fulfilledDay) byFulfilledDay[o.fulfilledDay] = (byFulfilledDay[o.fulfilledDay] || 0) + 1;
 
@@ -1339,12 +1366,64 @@ function computeOrderStatusSide(data, cfg){
     cancelled,
     shipped, notShipped, partial, unknown,
     byChannel, byOrderDay, byFulfilledDay,
+    backlog: backlogSummary(byDueDay),
+    shipByColumn: shipByCol || null,
     sla: summariseDays(slaDays, SLA_BUCKETS),
     age: summariseDays(ageDays, AGE_BUCKETS),
     ledger,
     duplicateRowCount: data.rows.length - orders.size,
     unrecognisedStatuses: [...unrecognised].slice(0, 20),
     reconciles: (shipped + notShipped + unknown + cancelled) === orders.size
+  };
+}
+
+// Turns the per-day map into a display-ready series plus the two boundaries
+// that matter: the last day essentially cleared, and the sharpest fall-off.
+function backlogSummary(byDueDay){
+  const today = isoToday();
+  const days = Object.keys(byDueDay).filter(d => d <= today).sort();
+  const future = Object.keys(byDueDay).filter(d => d > today)
+    .reduce((n,d)=> n + byDueDay[d].total, 0);
+  if(!days.length) return { days:[], caughtUpThrough:null, cliff:null, future:0, olderTotal:0, olderOpen:0 };
+
+  const series = days.map(d=>({
+    day: d,
+    total: byDueDay[d].total,
+    shipped: byDueDay[d].shipped,
+    open: byDueDay[d].open,
+    pct: byDueDay[d].total ? (byDueDay[d].shipped / byDueDay[d].total) * 100 : 0
+  }));
+
+  // Days with a handful of orders swing wildly on percentage and are not
+  // meaningful signal, so boundary detection ignores them.
+  const MIN_VOLUME = 50;
+  const solid = series.filter(s => s.total >= MIN_VOLUME);
+
+  let caughtUpThrough = null;
+  for(let i = solid.length - 1; i >= 0; i--){
+    if(solid[i].pct >= 95){ caughtUpThrough = solid[i].day; break; }
+  }
+
+  let cliff = null, biggestDrop = 0;
+  for(let i = 1; i < solid.length; i++){
+    const drop = solid[i-1].pct - solid[i].pct;
+    if(drop > biggestDrop){ biggestDrop = drop; cliff = solid[i].day; }
+  }
+  if(biggestDrop < 15) cliff = null;
+
+  const shown = series.slice(-18);
+  const older = series.slice(0, Math.max(0, series.length - 18));
+
+  return {
+    days: shown,
+    caughtUpThrough, cliff,
+    cliffDrop: cliff ? Math.round(biggestDrop * 10) / 10 : null,
+    future,
+    olderTotal: older.reduce((n,s)=> n + s.total, 0),
+    olderOpen:  older.reduce((n,s)=> n + s.open, 0),
+    openFromCaughtUp: caughtUpThrough
+      ? series.filter(s => s.day > caughtUpThrough).reduce((n,s)=> n + s.open, 0)
+      : series.reduce((n,s)=> n + s.open, 0)
   };
 }
 

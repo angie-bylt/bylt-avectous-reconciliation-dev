@@ -112,6 +112,15 @@
             <li>The "waiting longer than N days" figure uses the 90th percentile of actual ship time, so the line moves with the warehouse's own pace rather than being an invented target.</li>
           </ol>
 
+          <strong style="display:block; margin-top:11px;">How far back the warehouse is caught up</strong>
+          <ol>
+            <li>Orders grouped by <code>Ship Date</code>, <strong>never earlier than</strong> the order date.</li>
+            <li>Ship Date rather than order date because a prebook placed in March with an August ship date is due in August, not five months overdue.</li>
+            <li>Floored at the order date because a replacement order inherits the original's ship date &mdash; left alone, an order created on the 21st carrying a ship date of the 8th would look two weeks late the moment CX raised it.</li>
+            <li>"Caught up through" is the most recent day at 95%+ shipped. "Where it falls off" is the sharpest single-day drop. Days with fewer than 50 orders are ignored for both, since small days swing wildly on percentage.</li>
+            <li>Last 18 days shown; anything older is summarised underneath.</li>
+          </ol>
+
           <strong style="display:block; margin-top:11px;">By channel</strong>
           <ol>
             <li>Sales orders read channel from <code>Order Type</code>; transfer orders from <code>Channel</code>.</li>
@@ -273,6 +282,60 @@ function sideCard(r, label, bn){
       ${sla !== null ? `<div class="os-row"><span class="lbl">Typical time to ship</span><span class="num">${sla} ${sla === 1 ? 'day' : 'days'}</span></div>` : ''}
       ${bn ? `<div class="os-row"><span class="lbl">Waiting over ${bn.line} days</span><span class="num" style="color:#b8730a;">${fmt(bn.over)}</span></div>` : ''}
       ${r.unknown ? `<div class="os-row"><span class="lbl">Unrecognised status</span><span class="num">${fmt(r.unknown)}</span></div>` : ''}
+    </div>`;
+}
+
+
+// Which order days the warehouse has cleared, and where it stops.
+// Grouped by ship date rather than order date so prebooks land on the day
+// they are actually due.
+function backlogSection(r, label){
+  if(!r || r.error || !r.backlog || !r.backlog.days.length) return '';
+  const b = r.backlog;
+  const rows = b.days.map((d, i)=>{
+    const prev = i > 0 ? b.days[i-1] : null;
+    let div = '';
+    if(b.cliff && d.day === b.cliff) div = ' bl-div-hard';
+    else if(b.caughtUpThrough && prev && prev.day === b.caughtUpThrough) div = ' bl-div-soft';
+    const cls = d.pct >= 95 ? 'ok' : d.pct >= 50 ? 'warn' : 'bad';
+    const colour = cls === 'ok' ? 'var(--green)' : cls === 'warn' ? '#b8730a' : 'var(--red)';
+    return `
+      <div class="bl-row${div}${b.cliff && d.day === b.cliff ? ' is-cliff' : ''}">
+        <span class="d">${shortDay(d.day)}</span>
+        <div class="bl-track">
+          <div class="s" style="width:${d.pct}%;"></div>
+          <div class="o"></div>
+        </div>
+        <span class="n"><b style="color:${colour};">${d.pct.toFixed(1)}%</b> <span>${fmt(d.open)} open</span></span>
+      </div>`;
+  }).join('');
+
+  const foots = [];
+  if(b.olderTotal) foots.push(`${fmt(b.olderOpen)} orders are still open from before ${shortDay(b.days[0].day)}, out of ${fmt(b.olderTotal)} due then.`);
+  if(b.future) foots.push(`${fmt(b.future)} orders are due after today and sit outside this view.`);
+  foots.push(`Grouped by <strong>${escapeHtml(r.shipByColumn || 'Ship Date')}</strong>, never earlier than the order date &mdash; so a prebook lands on the day it's due, and a replacement order doesn't inherit its original's date.`);
+
+  return `
+    <div class="os-section">
+      <h3>${label} &mdash; how far back is the warehouse caught up?</h3>
+      <div class="os-section-sub">Orders grouped by the day they were due to ship. Green is shipped, red is still open.</div>
+      <div class="bl-heads">
+        <div>
+          <div class="v ok">${b.caughtUpThrough ? shortDay(b.caughtUpThrough) : '&mdash;'}</div>
+          <div class="l">caught up through<br>95%+ shipped on and before</div>
+        </div>
+        ${b.cliff ? `
+        <div>
+          <div class="v bad">${shortDay(b.cliff)}</div>
+          <div class="l">where it falls off<br>drops ${b.cliffDrop} points in a day</div>
+        </div>` : ''}
+        <div>
+          <div class="v warn">${fmt(b.openFromCaughtUp)}</div>
+          <div class="l">orders open since<br>${b.caughtUpThrough ? shortDay(b.caughtUpThrough) : 'the start'}</div>
+        </div>
+      </div>
+      <div class="bl-rows">${rows}</div>
+      <div class="bl-foot">${foots.join(' ')}</div>
     </div>`;
 }
 
@@ -497,6 +560,9 @@ function render(){
     </div>
 
     ${notes(current)}
+
+    ${backlogSection(current.so, 'Sales orders')}
+    ${backlogSection(current.to, 'Transfer orders')}
 
     ${channelTable(current.so, 'Sales orders')}
     ${channelTable(current.to, 'Transfer orders')}

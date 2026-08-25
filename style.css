@@ -364,3 +364,24 @@ tbody tr:nth-child(even){ background:#fbfcfd; }
 .ig-src .b{ background:var(--card); border:1px solid var(--border); border-radius:10px; padding:12px 14px; }
 .ig-src .b .n{ font-size:19px; font-weight:800; color:var(--navy); }
 .ig-src .b .l{ font-size:11px; color:var(--muted); margin-top:2px; }
+
+/* Backlog by due day */
+.bl-heads{ display:flex; gap:30px; flex-wrap:wrap; margin-bottom:16px; }
+.bl-heads .v{ font-size:26px; font-weight:800; line-height:1.05; }
+.bl-heads .v.ok{ color:var(--green); }
+.bl-heads .v.bad{ color:var(--red); }
+.bl-heads .v.warn{ color:#b8730a; }
+.bl-heads .l{ font-size:11.5px; color:var(--muted); margin-top:3px; line-height:1.45; }
+.bl-rows{ display:grid; gap:5px; }
+.bl-row{ display:grid; grid-template-columns:78px 1fr 132px; align-items:center; gap:10px; font-size:12.5px; }
+.bl-row .d{ color:var(--muted); }
+.bl-row.is-cliff .d{ color:var(--red); font-weight:700; }
+.bl-track{ background:#eef1f5; border-radius:3px; height:17px; overflow:hidden; display:flex; }
+.bl-track .s{ background:#1a7f37; }
+.bl-track .o{ background:#c22a2a; flex:1; }
+.bl-row .n{ text-align:right; }
+.bl-row .n b{ font-weight:700; }
+.bl-row .n span{ color:var(--muted); }
+.bl-div-soft{ border-top:1px dashed #c3cad3; padding-top:6px; margin-top:2px; }
+.bl-div-hard{ border-top:2px solid var(--red); padding-top:6px; margin-top:2px; }
+.bl-foot{ margin-top:13px; font-size:11.5px; color:var(--muted); line-height:1.6; }
