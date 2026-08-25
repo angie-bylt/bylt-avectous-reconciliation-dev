@@ -399,3 +399,6 @@ tbody tr:nth-child(even){ background:#fbfcfd; }
   .bl-band{ grid-template-columns:1fr; gap:4px; }
   .bl-band .n{ text-align:left; }
 }
+.bl-band.bl-muted{ opacity:0.72; }
+.bl-band.bl-total{ border-top:2px solid #c3cad3; padding-top:9px; margin-top:2px; }
+.bl-band.bl-total .bl-band-name{ font-size:13px; }

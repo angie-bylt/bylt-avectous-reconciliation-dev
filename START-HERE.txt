@@ -1,7 +1,7 @@
-BYLT dashboard -- update 10
+BYLT dashboard -- update 12
 ===========================
 
-UPLOAD THESE 9 FILES to your GitHub repo, replacing existing ones:
+UPLOAD THESE 10 FILES to your GitHub repo, replacing existing:
 
     integrations.html
     integrations-export.js
@@ -12,68 +12,57 @@ UPLOAD THESE 9 FILES to your GitHub repo, replacing existing ones:
     app.js
     style.css
     README.md
+    package.json
 
-GitHub -> Code -> Add file -> Upload files -> drag -> Commit changes.
-Then Netlify -> Deploys -> Trigger deploy.
+Do NOT upload this START-HERE.txt.
 
-(Do NOT upload this START-HERE.txt.)
-
-Includes updates 5 through 9.
+Replaces update 11 -- use this one instead.
 
 
-WHAT'S NEW
-----------
-"How far back is the warehouse caught up?" -- one section for
-sales orders, one for transfer orders. Sits above the channel
-tables.
+WHAT CHANGED
+------------
+The backlog chart now covers EVERY unshipped order, and the
+total ties to the card above it.
 
-One row per day. Each row shows what share of the orders due
-that day have shipped, plus how many are still open.
+Two rows added:
+    Older        everything before the 18-day window
+    Not due yet  pre-orders dated after today
+    All orders   the total, matching the card exactly
 
-Three headline numbers:
-    caught up through    8/10
-    where it falls off   8/17  (drops 44.4 points in a day)
-    orders open since    12,189
+The headline now reads "orders not shipped" and shows the full
+figure (12,428), not the subset (6,622). That was the number
+that didn't match.
 
-A dashed line marks where it stops being clean. A solid red
-line marks the cliff. Both are calculated, not typed in.
-
-
-WHY THIS IS DIFFERENT FROM "SHIPPED PER DAY"
---------------------------------------------
-They answer opposite questions and they disagree:
-
-  Shipped per day says the warehouse got 2,136 orders out
-  the door on 8/19 -- their best day.
-
-  This new section says orders DUE on 8/19 are 0.1% shipped.
-
-Both are true. The warehouse is working flat out on old
-orders and never reaching the new ones. Throughput alone
-would have said everything was fine.
+Also fixed: the bands were alternating Cleared / Part way /
+Cleared because one day sat at 94.3%, just under the old 95%
+threshold. Lowered to 93%, so a clean stretch stays one band.
 
 
-GROUPING
---------
-By Ship Date, never earlier than the order date.
-
-Ship Date, because a prebook placed in March with an August
-ship date is due in August -- not five months late. That alone
-moves 38 orders out of March.
-
-Floored at the order date, because a replacement order
-inherits the original's ship date. Without the floor, an order
-CX creates on the 21st carrying a ship date of the 8th would
-look two weeks late the instant it exists.
+HOW TO CHECK IT
+---------------
+On each backlog section, the "All orders" row should equal
+"Not shipped" on the card above. If it doesn't, something is
+wrong -- tell me.
 
 
-NUMBERS MATCH YOUR MANUAL WORK
-------------------------------
-    8/11  82.3%   249 open
-    8/12  81.0%   264 open
-    8/13  74.4%   342 open
-    8/14  68.6%   422 open
-    8/15  66.7%   449 open
-    8/16  61.0%   572 open
-    8/17  16.6% 1,086 open
-    8/18  13.5% 1,113 open
+THEN DEPLOY TO PRODUCTION
+-------------------------
+1. Push these files, let dev redeploy, check the numbers tie
+2. Netlify -> Add new project -> Import existing project
+   -> GitHub -> pick your existing repo
+3. Build command: BLANK.  Publish directory: BLANK or a dot.
+   Functions directory: netlify/functions
+4. Project configuration -> Environment variables, add BOTH:
+       SITE_PASSWORD    the password people type
+       SESSION_SECRET   any long random string
+   Both required. Without SESSION_SECRET nobody can log in.
+5. Deploys -> Trigger deploy -> Deploy site
+6. Sign in, then load the files once:
+       Order Status         2 files
+       Integrations Status  4 files
+   Blob storage is per-site, so production starts empty.
+7. Project configuration -> General -> Change project name
+
+Do NOT push over an existing production site that serves the
+inventory reconciliation dashboard -- that would replace
+index.html. Make a new site instead.

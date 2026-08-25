@@ -288,23 +288,25 @@ function sideCard(r, label, bn){
 
 // Which order days the warehouse has cleared, and where it stops.
 // Grouped by ship date rather than order date so prebooks land on the day
-// they are actually due. Shows three phase bands by default; the per-day
-// breakdown is one click away for when someone needs to work the detail.
+// they are actually due. Bands cover every unshipped order and total the
+// card above; the per-day breakdown is one click away.
 function backlogSection(r, label, idx){
   if(!r || r.error || !r.backlog || !r.backlog.days.length) return '';
   const b = r.backlog;
-  const tone = lvl => lvl === 'cleared' ? ['var(--green)','#1a7f37']
+  const tone = lvl => lvl === 'cleared' || lvl === 'older' ? ['var(--green)','#1a7f37']
                     : lvl === 'progress' ? ['#b8730a','#e0a83c']
                     : ['var(--red)','#c22a2a'];
 
   const bandRows = b.bands.map(x=>{
     const [txt, bar] = tone(x.level);
-    const span = x.dayCount === 1 ? shortDay(x.from) : `${shortDay(x.from)} &ndash; ${shortDay(x.to)}`;
+    const span = x.level === 'older'
+      ? `before ${shortDay(x.to)} &middot; ${x.dayCount} ${x.dayCount === 1 ? 'day' : 'days'}`
+      : `${x.dayCount === 1 ? shortDay(x.from) : shortDay(x.from) + ' &ndash; ' + shortDay(x.to)} &middot; ${x.dayCount} ${x.dayCount === 1 ? 'day' : 'days'}`;
     return `
-      <div class="bl-band">
+      <div class="bl-band${x.muted ? ' bl-muted' : ''}">
         <div>
           <div class="bl-band-name">${x.label}</div>
-          <div class="bl-band-span">${span} &middot; ${x.dayCount} ${x.dayCount === 1 ? 'day' : 'days'}</div>
+          <div class="bl-band-span">${span}</div>
         </div>
         <div class="bl-track bl-track-lg">
           <div class="s" style="width:${x.pct}%; background:${bar};"></div>
@@ -315,7 +317,7 @@ function backlogSection(r, label, idx){
   }).join('');
 
   const dayRows = b.days.map(d=>{
-    const [txt] = tone(d.pct >= 95 ? 'cleared' : d.pct < 1 ? 'notstarted' : 'progress');
+    const [txt] = tone(d.pct >= 93 ? 'cleared' : d.pct < 1 ? 'notstarted' : 'progress');
     return `
       <div class="bl-row">
         <span class="d">${shortDay(d.day)}</span>
@@ -325,8 +327,6 @@ function backlogSection(r, label, idx){
   }).join('');
 
   const foots = [];
-  if(b.olderTotal) foots.push(`${fmt(b.olderOpen)} orders are still open from before ${shortDay(b.days[0].day)}, out of ${fmt(b.olderTotal)} due then.`);
-  if(b.future) foots.push(`${fmt(b.future)} orders are due after today and sit outside this view.`);
   foots.push(`Grouped by <strong>${escapeHtml(r.shipByColumn || 'Ship Date')}</strong>, never earlier than the order date &mdash; so a prebook lands on the day it's due, and a replacement order doesn't inherit its original's date.`);
 
   const id = 'bl' + idx;
@@ -345,11 +345,27 @@ function backlogSection(r, label, idx){
           <div class="l">nothing shipped since</div>
         </div>` : ''}
         <div>
-          <div class="v warn">${fmt(b.openFromCaughtUp)}</div>
-          <div class="l">orders open</div>
+          <div class="v warn">${fmt(b.totalOpenAll)}</div>
+          <div class="l">orders not shipped</div>
         </div>
       </div>
-      <div class="bl-bands">${bandRows}</div>
+      <div class="bl-bands">
+        ${bandRows}
+        ${b.future ? `
+        <div class="bl-band bl-muted">
+          <div>
+            <div class="bl-band-name">Not due yet</div>
+            <div class="bl-band-span">due after today</div>
+          </div>
+          <div class="bl-track bl-track-lg"><div class="o"></div></div>
+          <span class="n"><b style="color:var(--muted);">&mdash;</b> <span>${fmt(b.future)} open</span></span>
+        </div>` : ''}
+        <div class="bl-band bl-total">
+          <div class="bl-band-name">All orders</div>
+          <div></div>
+          <span class="n"><b>${b.totalPctAll.toFixed(1)}%</b> <span>${fmt(b.totalOpenAll)} open</span></span>
+        </div>
+      </div>
       <div class="bl-expand" data-bl="${id}">Show every day &#9662;</div>
       <div class="bl-rows" id="${id}" style="display:none;">${dayRows}</div>
       <div class="bl-foot">${foots.join(' ')}</div>

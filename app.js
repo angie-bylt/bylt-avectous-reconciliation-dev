@@ -1377,18 +1377,21 @@ function computeOrderStatusSide(data, cfg){
   };
 }
 
-// Turns the per-day map into a display-ready series, plus phase bands and the
-// boundaries that matter. Eighteen rows of daily detail is more than anyone
-// reads, so consecutive days at a similar completion level are folded into a
-// single band and the per-day list becomes opt-in.
+// Turns the per-day map into phase bands plus the boundaries that matter.
+//
+// Every unshifted order appears somewhere: the recent window gets its own
+// bands, and everything older is folded into a single "Older" band rather
+// than a footnote, so the bands always total the card above.
 function backlogSummary(byDueDay){
   const today = isoToday();
   const days = Object.keys(byDueDay).filter(d => d <= today).sort();
-  const future = Object.keys(byDueDay).filter(d => d > today)
-    .reduce((n,d)=> n + byDueDay[d].total, 0);
+  const futureKeys = Object.keys(byDueDay).filter(d => d > today);
+  const future     = futureKeys.reduce((n,d)=> n + byDueDay[d].total, 0);
+  const futureOpen = futureKeys.reduce((n,d)=> n + byDueDay[d].open, 0);
   if(!days.length){
     return { days:[], bands:[], caughtUpThrough:null, nothingSince:null,
-             future:0, olderTotal:0, olderOpen:0, openFromCaughtUp:0 };
+             future:0, totalOpen:0, totalOrders:0, totalPct:0,
+             totalOpenAll:0, totalPctAll:0 };
   }
 
   const series = days.map(d=>({
@@ -1399,54 +1402,78 @@ function backlogSummary(byDueDay){
     pct: byDueDay[d].total ? (byDueDay[d].shipped / byDueDay[d].total) * 100 : 0
   }));
 
-  // Days with a handful of orders swing wildly on percentage, so boundary
-  // detection ignores them rather than letting a 2-order day set the line.
+  // Boundary detection ignores tiny days: a 2-order day at 0% shouldn't
+  // decide where the warehouse has got to.
   const MIN_VOLUME = 50;
   const solid = series.filter(s => s.total >= MIN_VOLUME);
 
+  // 93 rather than 95, because a day sitting at 94% is part of the cleared
+  // run in practice and a tighter threshold splits one clean stretch into
+  // three bands that read like a problem.
+  const CLEARED_PCT = 93;
+
   let caughtUpThrough = null;
   for(let i = solid.length - 1; i >= 0; i--){
-    if(solid[i].pct >= 95){ caughtUpThrough = solid[i].day; break; }
+    if(solid[i].pct >= CLEARED_PCT){ caughtUpThrough = solid[i].day; break; }
   }
 
-  // The first day of the trailing run where essentially nothing has shipped.
   let nothingSince = null;
   for(let i = solid.length - 1; i >= 0; i--){
     if(solid[i].pct < 1) nothingSince = solid[i].day;
     else break;
   }
 
-  const shown = series.slice(-18);
-  const older = series.slice(0, Math.max(0, series.length - 18));
+  const WINDOW = 18;
+  const shown = series.slice(-WINDOW);
+  const older = series.slice(0, Math.max(0, series.length - WINDOW));
 
-  // Fold consecutive days at the same completion level into one band.
-  const levelOf = p => p >= 95 ? 'cleared' : p < 1 ? 'notstarted' : 'progress';
+  const levelOf = p => p >= CLEARED_PCT ? 'cleared' : p < 1 ? 'notstarted' : 'progress';
   const LABELS = { cleared:'Cleared', progress:'Part way through', notstarted:'Not started' };
+
   const bands = [];
+  const push = (level, label, from, to, dayCount, total, shipped, open, muted) => {
+    bands.push({ level, label, from, to, dayCount, total, shipped, open, muted:!!muted,
+                 pct: total ? (shipped / total) * 100 : 0 });
+  };
+
+  if(older.length){
+    push('older', 'Older', older[0].day, older[older.length-1].day, older.length,
+         older.reduce((n,s)=>n+s.total,0), older.reduce((n,s)=>n+s.shipped,0),
+         older.reduce((n,s)=>n+s.open,0), true);
+  }
+
   shown.forEach(d=>{
     const level = levelOf(d.pct);
     const last = bands[bands.length - 1];
-    if(last && last.level === level){
+    if(last && last.level === level && !last.muted){
       last.to = d.day; last.dayCount++;
       last.total += d.total; last.shipped += d.shipped; last.open += d.open;
+      last.pct = last.total ? (last.shipped / last.total) * 100 : 0;
     } else {
-      bands.push({ level, label: LABELS[level], from: d.day, to: d.day, dayCount: 1,
-                   total: d.total, shipped: d.shipped, open: d.open });
+      push(level, LABELS[level], d.day, d.day, 1, d.total, d.shipped, d.open);
     }
   });
-  bands.forEach(b=>{ b.pct = b.total ? (b.shipped / b.total) * 100 : 0; });
+
+  const totalOrders = series.reduce((n,s)=>n+s.total,0);
+  const totalOpen   = series.reduce((n,s)=>n+s.open,0);
+
+  // Two totals: the bands cover due dates up to today, but the card counts
+  // every unshipped order including pre-orders not due yet. The "All orders"
+  // row uses the wider figure so it ties to the card exactly.
+  const totalOrdersAll = totalOrders + future;
+  const totalOpenAll   = totalOpen + futureOpen;
 
   return {
     days: shown,
     bands,
     caughtUpThrough,
     nothingSince,
-    future,
-    olderTotal: older.reduce((n,s)=> n + s.total, 0),
-    olderOpen:  older.reduce((n,s)=> n + s.open, 0),
-    openFromCaughtUp: caughtUpThrough
-      ? series.filter(s => s.day > caughtUpThrough).reduce((n,s)=> n + s.open, 0)
-      : series.reduce((n,s)=> n + s.open, 0)
+    future: futureOpen,
+    totalOrders,
+    totalOpen,
+    totalPct: totalOrders ? ((totalOrders - totalOpen) / totalOrders) * 100 : 0,
+    totalOpenAll,
+    totalPctAll: totalOrdersAll ? ((totalOrdersAll - totalOpenAll) / totalOrdersAll) * 100 : 0
   };
 }
 
