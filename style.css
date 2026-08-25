@@ -385,3 +385,17 @@ tbody tr:nth-child(even){ background:#fbfcfd; }
 .bl-div-soft{ border-top:1px dashed #c3cad3; padding-top:6px; margin-top:2px; }
 .bl-div-hard{ border-top:2px solid var(--red); padding-top:6px; margin-top:2px; }
 .bl-foot{ margin-top:13px; font-size:11.5px; color:var(--muted); line-height:1.6; }
+
+/* Backlog phase bands */
+.bl-bands{ display:grid; gap:9px; }
+.bl-band{ display:grid; grid-template-columns:150px 1fr 140px; align-items:center; gap:11px; }
+.bl-band-name{ font-size:13px; font-weight:700; }
+.bl-band-span{ font-size:10.5px; color:var(--muted); margin-top:1px; }
+.bl-track-lg{ height:22px; }
+.bl-band .n{ text-align:right; font-size:12.5px; }
+.bl-expand{ margin-top:12px; padding-top:10px; border-top:1px solid var(--border); font-size:11.5px; color:var(--blue); font-weight:600; cursor:pointer; user-select:none; }
+.bl-rows{ margin-top:10px; }
+@media (max-width:700px){
+  .bl-band{ grid-template-columns:1fr; gap:4px; }
+  .bl-band .n{ text-align:left; }
+}

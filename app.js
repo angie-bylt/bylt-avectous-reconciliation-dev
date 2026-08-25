@@ -1377,14 +1377,19 @@ function computeOrderStatusSide(data, cfg){
   };
 }
 
-// Turns the per-day map into a display-ready series plus the two boundaries
-// that matter: the last day essentially cleared, and the sharpest fall-off.
+// Turns the per-day map into a display-ready series, plus phase bands and the
+// boundaries that matter. Eighteen rows of daily detail is more than anyone
+// reads, so consecutive days at a similar completion level are folded into a
+// single band and the per-day list becomes opt-in.
 function backlogSummary(byDueDay){
   const today = isoToday();
   const days = Object.keys(byDueDay).filter(d => d <= today).sort();
   const future = Object.keys(byDueDay).filter(d => d > today)
     .reduce((n,d)=> n + byDueDay[d].total, 0);
-  if(!days.length) return { days:[], caughtUpThrough:null, cliff:null, future:0, olderTotal:0, olderOpen:0 };
+  if(!days.length){
+    return { days:[], bands:[], caughtUpThrough:null, nothingSince:null,
+             future:0, olderTotal:0, olderOpen:0, openFromCaughtUp:0 };
+  }
 
   const series = days.map(d=>({
     day: d,
@@ -1394,8 +1399,8 @@ function backlogSummary(byDueDay){
     pct: byDueDay[d].total ? (byDueDay[d].shipped / byDueDay[d].total) * 100 : 0
   }));
 
-  // Days with a handful of orders swing wildly on percentage and are not
-  // meaningful signal, so boundary detection ignores them.
+  // Days with a handful of orders swing wildly on percentage, so boundary
+  // detection ignores them rather than letting a 2-order day set the line.
   const MIN_VOLUME = 50;
   const solid = series.filter(s => s.total >= MIN_VOLUME);
 
@@ -1404,20 +1409,38 @@ function backlogSummary(byDueDay){
     if(solid[i].pct >= 95){ caughtUpThrough = solid[i].day; break; }
   }
 
-  let cliff = null, biggestDrop = 0;
-  for(let i = 1; i < solid.length; i++){
-    const drop = solid[i-1].pct - solid[i].pct;
-    if(drop > biggestDrop){ biggestDrop = drop; cliff = solid[i].day; }
+  // The first day of the trailing run where essentially nothing has shipped.
+  let nothingSince = null;
+  for(let i = solid.length - 1; i >= 0; i--){
+    if(solid[i].pct < 1) nothingSince = solid[i].day;
+    else break;
   }
-  if(biggestDrop < 15) cliff = null;
 
   const shown = series.slice(-18);
   const older = series.slice(0, Math.max(0, series.length - 18));
 
+  // Fold consecutive days at the same completion level into one band.
+  const levelOf = p => p >= 95 ? 'cleared' : p < 1 ? 'notstarted' : 'progress';
+  const LABELS = { cleared:'Cleared', progress:'Part way through', notstarted:'Not started' };
+  const bands = [];
+  shown.forEach(d=>{
+    const level = levelOf(d.pct);
+    const last = bands[bands.length - 1];
+    if(last && last.level === level){
+      last.to = d.day; last.dayCount++;
+      last.total += d.total; last.shipped += d.shipped; last.open += d.open;
+    } else {
+      bands.push({ level, label: LABELS[level], from: d.day, to: d.day, dayCount: 1,
+                   total: d.total, shipped: d.shipped, open: d.open });
+    }
+  });
+  bands.forEach(b=>{ b.pct = b.total ? (b.shipped / b.total) * 100 : 0; });
+
   return {
     days: shown,
-    caughtUpThrough, cliff,
-    cliffDrop: cliff ? Math.round(biggestDrop * 10) / 10 : null,
+    bands,
+    caughtUpThrough,
+    nothingSince,
     future,
     olderTotal: older.reduce((n,s)=> n + s.total, 0),
     olderOpen:  older.reduce((n,s)=> n + s.open, 0),
