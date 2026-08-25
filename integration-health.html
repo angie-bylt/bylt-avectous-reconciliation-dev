@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>BYLT / NetSuite–Avectous Integration Health</title>
+<title>BYLT / Receiving, Inventory &amp; VESYL Audits</title>
 <link rel="stylesheet" href="style.css">
 <script src="auth-check.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
@@ -15,7 +15,7 @@
   <nav>
     <a href="index.html">Order Status</a>
     <a href="integrations.html">Integrations Status</a>
-    <a href="integration-health.html" class="current">Integration Health</a>
+    <a href="integration-health.html" class="current">Receiving, Inventory &amp; VESYL</a>
     <a href="load-data.html">Load Data</a>
     <a href="totals.html">Totals</a>
     <a href="#" id="logoutLink" style="margin-left:24px;">Log out</a>
@@ -23,7 +23,7 @@
 </header>
 <div class="crumbline" style="display:flex; justify-content:space-between; align-items:flex-end; gap:16px; flex-wrap:wrap;">
   <div>
-    <h1>BYLT / NetSuite / Avectous Integration Health</h1>
+    <h1>Receiving, Inventory &amp; VESYL Audits</h1>
     <div class="path" id="asOf">Loading…</div>
   </div>
   <div style="display:flex; align-items:center; gap:12px;">
@@ -44,6 +44,16 @@
 
 <script src="app.js"></script>
 <script>
+// This tab now covers receiving, inventory and VESYL only. Sales orders,
+// transfer orders and both fulfillment audits moved to the Order Status and
+// Integrations Status tabs; Shopify Fulfillments was dropped, and Shopify
+// eCommerce Orders from Celigo is parked until it gets its own tab.
+//
+// Filtered here rather than removed from SECTIONS, because Load Data and
+// Totals still drive off the full list.
+const HEALTH_SECTION_IDS = ['ito','is','inv','vesyl'];
+const HEALTH_SECTIONS = SECTIONS.filter(s => HEALTH_SECTION_IDS.includes(s.id));
+
 const grid = document.getElementById('dashboard-grid');
 let latest = null;
 let lastSectionsWithResults = [];
@@ -82,7 +92,7 @@ async function init(){
   const shared = await loadSharedResults();
 
   auditorNotes = {};
-  SECTIONS.forEach(s=>{
+  HEALTH_SECTIONS.forEach(s=>{
     const key = s.id + '_auditor_note';
     if(shared[key] && shared[key].result){
       auditorNotes[s.id] = shared[key].result;
@@ -112,7 +122,7 @@ async function init(){
   fulfillmentSummarySavedAt = fsSavedAt;
   fulfillmentSummarySavedAt = fsSavedAt;
 
-  lastSectionsWithResults = SECTIONS.map(s=>{
+  lastSectionsWithResults = HEALTH_SECTIONS.map(s=>{
     let result = null, savedAt = null, ranBy = null;
     if(shared[s.id]){
       result = shared[s.id].result;
@@ -357,7 +367,11 @@ function renderScorecard(){
   `;
 
   overall.innerHTML = headerHtml + statCardsHtml + gaugesRowHtml;
-  grid.before(overall);
+  // Overview bar intentionally not inserted: it summarised sales orders,
+  // transfer orders and fulfillment sync, which moved to the Order Status and
+  // Integrations Status tabs. Left built rather than deleted so it can be
+  // restored by uncommenting one line.
+  // grid.before(overall);
   wireFulfillmentDateFilter();
 
   lastSectionsWithResults.forEach(({s, result, savedAt, ranBy})=>{
@@ -565,7 +579,7 @@ function exportScorecardToExcel(){
   });
   const ws = XLSX.utils.json_to_sheet(rows);
   const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, 'Integration Health');
+  XLSX.utils.book_append_sheet(wb, ws, 'Receiving Inv VESYL');
   const stamp = new Date().toISOString().slice(0,10);
   XLSX.writeFile(wb, `BYLT_Integration_Health_${stamp}.xlsx`);
 }
@@ -611,9 +625,9 @@ function exportScorecardToWord(){
 
   const html = `
     <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">
-    <head><meta charset="utf-8"><title>BYLT Integration Health</title></head>
+    <head><meta charset="utf-8"><title>BYLT Receiving, Inventory &amp; VESYL Audits</title></head>
     <body style="font-family:Calibri,Arial,sans-serif; color:#1c2733;">
-      <h1 style="color:#1e3a5f; font-size:22px; margin-bottom:2px;">BYLT Integration Health</h1>
+      <h1 style="color:#1e3a5f; font-size:22px; margin-bottom:2px;">BYLT Receiving, Inventory &amp; VESYL Audits</h1>
       <p style="color:#6b7684; font-size:12px; margin-top:0;">NetSuite ↔ Avectous · Generated ${dateStr} at ${timeStr}</p>
       <p style="font-size:14px; margin:16px 0;"><b>${okCount} of ${loaded.length}</b> loaded areas are clean (${pct}% overall health). ${lastSectionsWithResults.length - loaded.length} area(s) not yet loaded.</p>
       <table style="border-collapse:collapse; width:100%; font-size:13px;">

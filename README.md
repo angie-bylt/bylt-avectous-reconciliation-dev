@@ -4,10 +4,10 @@ Pages, one password gate:
 - login.html              -> Sign in (password gate for the whole site)
 - index.html              -> Order Status, 810 Texas DC — landing page / first tab
 - integrations.html       -> Integrations Status (NetSuite <-> Avectous queue audit)
-- integration-health.html -> Integration Health (was index.html: missing records + discrepancies)
+- integration-health.html -> Receiving, Inventory & VESYL Audits
 - load-data.html          -> Load Data (upload NetSuite + Avectous CSVs or XLSX, compare)
 - totals.html             -> Totals (just the summary numbers, one row per area)
-- dashboard.html          -> redirects to integration-health.html for old bookmarks
+- dashboard.html          -> redirects to index.html for old bookmarks
 
 ## Order Status tab
 
@@ -252,3 +252,21 @@ individual logins per person.
   double-clicking it on your computer instead of via the live Netlify URL),
   it logs a warning to the console instead of blocking you — the password
   gate only actually works once this is deployed.
+
+
+## Receiving, Inventory & VESYL Audits tab
+
+Formerly the Integration Health tab, and formerly `index.html`. Now covers four
+areas only: Inbound TOs, Inbound Shipments, Inventory Discrepancies, and the
+VESYL Shipments Audit.
+
+Removed from this tab because they moved to Order Status and Integrations
+Status: Sales Orders, Outbound Transfer Orders, SO Fulfillments, Outbound TO
+Fulfillments, and the Fulfillment & Audit Overview bar at the top. Shopify
+Fulfillments was dropped outright; Shopify eCommerce Orders from Celigo is
+parked until it gets its own tab.
+
+These are filtered out at render time via `HEALTH_SECTION_IDS`, not deleted from
+`SECTIONS` — Load Data and Totals still drive off the full list, so nothing
+became unloadable. The overview bar is still built and simply not inserted, so
+restoring it is one commented line in `renderScorecard`.
