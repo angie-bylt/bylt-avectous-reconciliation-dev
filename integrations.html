@@ -298,8 +298,8 @@ function render(){
 
   el.innerHTML = `
     <div class="ig-src">
-      <div class="b"><div class="n">${fmt(c.nsSo)}</div><div class="l">Sales orders — NetSuite 4866</div></div>
-      <div class="b"><div class="n">${fmt(c.nsTo)}</div><div class="l">Transfer orders — NetSuite 4867</div></div>
+      <div class="b"><div class="n">${fmt(c.nsSo)}</div><div class="l">Sales orders — NetSuite 4866${c.nsSoCancelled ? `<br>${fmt(c.nsSoCancelled)} cancelled excluded` : ''}</div></div>
+      <div class="b"><div class="n">${fmt(c.nsTo)}</div><div class="l">Transfer orders — NetSuite 4867${c.nsToCancelled ? `<br>${fmt(c.nsToCancelled)} cancelled excluded` : ''}</div></div>
       <div class="b"><div class="n">${fmt(c.avSync)}</div><div class="l">Orders — Avectous</div></div>
       <div class="b"><div class="n">${fmt(c.avShip)}</div><div class="l">Shipments — Avectous</div></div>
     </div>

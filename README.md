@@ -159,9 +159,10 @@ Closed. CX is actively trying to stop these, so counting them as warehouse
 backlog blames the warehouse for orders nobody wants shipped, and counting them
 as missing from Avectous flags a queue fault where none exists.
 
-98 sales orders and 7 transfer orders on the 21 Aug data. Excluded from every
-percentage on both tabs, always reported as a visible count, and listed in full
-on the Cancelled Excluded sheet of the export.
+Excluded from every percentage on both tabs, and from the source-file tiles at
+the top of Integrations Status too — otherwise the tile disagrees with the
+"Orders in NetSuite" line on the card directly beneath it. Always reported as a
+visible count, and listed in full on the Cancelled Excluded sheet of the export.
 
 ### Matching and exclusions
 

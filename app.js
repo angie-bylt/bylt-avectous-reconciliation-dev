@@ -1704,6 +1704,17 @@ function avOrderIndex(data, cfg){
   return { byKey, keyColumn:keyCol, latestDay: [...byKey.values()].reduce((a,o)=> (o.day && (!a || o.day > a)) ? o.day : a, null) };
 }
 
+function countLive(side){
+  let n = 0;
+  side.byKey.forEach(o=>{ if(!o.cancelled) n++; });
+  return n;
+}
+function countCancelled(side){
+  let n = 0;
+  side.byKey.forEach(o=>{ if(o.cancelled) n++; });
+  return n;
+}
+
 function pctOf(part, whole){ return whole > 0 ? (part / whole) * 100 : null; }
 
 function computeIntegrations(soData, toData, syncData, shipData){
@@ -1814,7 +1825,11 @@ function computeIntegrations(soData, toData, syncData, shipData){
     },
     orphans,
     counts:{
-      nsSo: ns.so.byKey.size, nsTo: ns.to.byKey.size,
+      // Cancelled orders are excluded from every audit below, so the source
+      // tiles must exclude them too — otherwise the headline count disagrees
+      // with the "Orders in NetSuite" line on the card underneath it.
+      nsSo: countLive(ns.so), nsTo: countLive(ns.to),
+      nsSoCancelled: countCancelled(ns.so), nsToCancelled: countCancelled(ns.to),
       avSync: av.sync.byKey.size, avShip: av.ship.byKey.size
     }
   };
