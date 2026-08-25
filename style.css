@@ -402,3 +402,12 @@ tbody tr:nth-child(even){ background:#fbfcfd; }
 .bl-band.bl-muted{ opacity:0.72; }
 .bl-band.bl-total{ border-top:2px solid #c3cad3; padding-top:9px; margin-top:2px; }
 .bl-band.bl-total .bl-band-name{ font-size:13px; }
+
+/* Nav labels grew longer once the two Integrations tabs were named in full,
+   so the bar wraps rather than overflowing on narrower screens. */
+header.topbar{ flex-wrap:wrap; row-gap:6px; }
+header.topbar nav{ display:flex; flex-wrap:wrap; align-items:center; row-gap:4px; }
+header.topbar nav a{ margin-left:16px; }
+@media (max-width:1100px){
+  header.topbar nav a{ margin-left:12px; font-size:12.5px; }
+}

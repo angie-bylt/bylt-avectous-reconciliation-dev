@@ -3,10 +3,10 @@
 Pages, one password gate:
 - login.html              -> Sign in (password gate for the whole site)
 - index.html              -> Order Status, 810 Texas DC — landing page / first tab
-- integrations.html       -> Integrations Status (NetSuite <-> Avectous queue audit)
-- integration-health.html -> Receiving, Inventory & VESYL Audits
+- integrations.html       -> Integrations Status - Orders (NetSuite <-> Avectous queue audit)
+- integration-health.html -> Integrations Status - Receiving, Inventory & VESYL Audits
 - load-data.html          -> Load Data (upload NetSuite + Avectous CSVs or XLSX, compare)
-- totals.html             -> Totals (just the summary numbers, one row per area)
+- totals.html             -> removed; redirects to index.html for old bookmarks
 - dashboard.html          -> redirects to index.html for old bookmarks
 
 ## Order Status tab
