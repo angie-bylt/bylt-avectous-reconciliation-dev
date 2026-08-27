@@ -34,9 +34,12 @@ and it made the five numbers people actually asked for harder to find.
 ### The five metrics
 
 1. **Total, shipped, not shipped** with percentages, combined and per order type.
-2. **How far behind** — orders grouped by creation date. The most recent day at
-   90%+ shipped is the last day cleared; the gap from there to today is the lag.
-   Days under 50 orders are skipped so a quiet day can't set the line.
+2. **How far behind** — orders grouped by creation date, each row showing the
+   shipped count, the open count and the percentage. Both counts matter: 54.5%
+   of 1,367 orders is a different problem from 54.5% of 12. The most recent day
+   at 90%+ shipped is the last day cleared; the gap from there to today is the
+   lag. Days under 50 orders are skipped so a quiet day can't set the line, and
+   90% rather than 100% because a few stragglers always linger.
 3. **By channel** — sales orders read `Order Source`, transfer orders read
    `Channel`. The All channels row always matches the card above.
 4. **Shipped per day** — counted on the day Avectous shipped.

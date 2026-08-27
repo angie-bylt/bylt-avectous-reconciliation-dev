@@ -431,3 +431,14 @@ header.topbar nav a{ margin-left:16px; }
 .bl-lead:last-of-type{ margin-bottom:18px; }
 .bl-heads{ padding-top:14px; border-top:1px solid var(--border); }
 @media (max-width:640px){ .bl-lead{ font-size:16px; } }
+
+/* Backlog rows showing shipped and open counts alongside the percentage */
+.bl-row.bl-row-wide{ grid-template-columns:64px 1fr 250px; }
+.bl-row-wide .n{ display:flex; gap:14px; justify-content:flex-end; align-items:baseline; }
+.bl-row-wide .n .cnt{ color:var(--muted); font-size:12px; white-space:nowrap; }
+.bl-row-wide .n .cnt b{ font-weight:700; }
+.bl-row-wide .n .pc{ min-width:52px; text-align:right; }
+@media (max-width:820px){
+  .bl-row.bl-row-wide{ grid-template-columns:52px 1fr; row-gap:2px; }
+  .bl-row-wide .n{ grid-column:1 / -1; justify-content:flex-start; padding-left:52px; }
+}

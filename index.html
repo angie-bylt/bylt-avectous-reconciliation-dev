@@ -259,10 +259,14 @@ function behindSection(r, label, idx){
   const rows = b.days.map(d=>{
     const colour = d.pct >= 90 ? 'var(--green)' : d.pct >= 40 ? '#b8730a' : 'var(--red)';
     return `
-      <div class="bl-row">
+      <div class="bl-row bl-row-wide">
         <span class="d">${shortDay(d.day)}</span>
         <div class="bl-track"><div class="s" style="width:${d.pct}%; background:${colour};"></div><div class="o"></div></div>
-        <span class="n"><b style="color:${colour};">${d.pct.toFixed(1)}%</b> <span>${fmt(d.notShipped)} open</span></span>
+        <span class="n">
+          <span class="cnt"><b style="color:var(--green);">${fmt(d.shipped)}</b> shipped</span>
+          <span class="cnt"><b style="color:var(--red);">${fmt(d.notShipped)}</b> open</span>
+          <b class="pc" style="color:${colour};">${d.pct.toFixed(1)}%</b>
+        </span>
       </div>`;
   }).join('');
 
