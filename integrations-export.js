@@ -24,9 +24,26 @@
     return s;
   }
 
-  function add(wb, name, sh){
-    // Excel caps sheet names at 31 characters and rejects several symbols.
-    XLSX.utils.book_append_sheet(wb, sh, name.replace(/[\\\/\?\*\[\]:]/g,'-').slice(0,31));
+  // One unbuildable sheet must not cost you the whole workbook. Previously a
+  // single failure part-way through left a 3-sheet file with no Summary, which
+  // looked like the export had silently truncated.
+  const failures = [];
+  function add(wb, name, build){
+    const safe = name.replace(/[\\\/\?\*\[\]:]/g,'-').slice(0,31);
+    try{
+      const sh = (typeof build === 'function') ? build() : build;
+      if(!sh) throw new Error('sheet builder returned nothing');
+      XLSX.utils.book_append_sheet(wb, sh, safe);
+    } catch(err){
+      failures.push(`${safe}: ${err.message}`);
+      // Leave a placeholder so the sheet's absence is visible in the file
+      // rather than being something you have to notice.
+      try{
+        XLSX.utils.book_append_sheet(wb,
+          XLSX.utils.aoa_to_sheet([[`This sheet could not be built.`], [err.message],
+            ['Everything else in this workbook is unaffected.']]), safe);
+      } catch(_){}
+    }
   }
 
   window.exportComparison = function exportComparison(){
@@ -90,6 +107,10 @@
       const sum = XLSX.utils.aoa_to_sheet(S);
       sum['!cols'] = [{wch:36},{wch:22},{wch:14},{wch:12},{wch:11},{wch:30}];
       add(wb, 'Summary', sum);
+      // Version marker: if this line is missing from your export, the browser
+      // is serving a cached copy of this script. Hard-refresh the page.
+      S.push([]);
+      S.push(['Export built', new Date().toLocaleString(), 'workbook version 2']);
 
       const M = [];
       const m = (...r) => M.push(r.map(x => x === undefined ? '' : x));
@@ -135,14 +156,14 @@
       meth['!cols'] = [{wch:22},{wch:120}];
       add(wb, 'Method', meth);
 
-      add(wb, 'SO Sync Missing',         sheet(SYNC_HEADERS,   a.soSync.rows));
-      add(wb, 'TO Sync Missing',         sheet(SYNC_HEADERS,   a.toSync.rows));
-      add(wb, 'SO Fulfillments Missing', sheet(FULFIL_HEADERS, a.soFulfil.rows));
-      add(wb, 'TO Fulfillments Missing', sheet(FULFIL_HEADERS, a.toFulfil.rows));
+      add(wb, 'SO Sync Missing',         ()=> sheet(SYNC_HEADERS,   a.soSync.rows));
+      add(wb, 'TO Sync Missing',         ()=> sheet(SYNC_HEADERS,   a.toSync.rows));
+      add(wb, 'SO Fulfillments Missing', ()=> sheet(FULFIL_HEADERS, a.soFulfil.rows));
+      add(wb, 'TO Fulfillments Missing', ()=> sheet(FULFIL_HEADERS, a.toFulfil.rows));
       const testSet = new Set(current.orphans.tests.map(r => r[0]));
       const orphanRows = current.orphans.sync.concat(current.orphans.ship)
         .map(r => r.concat([ testSet.has(r[0]) ? 'Avectous test order' : 'Created after the NetSuite pull' ]));
-      add(wb, 'In Avectous Only', sheet(ORPHAN_HEADERS, orphanRows));
+      add(wb, 'In Avectous Only', ()=> sheet(ORPHAN_HEADERS, orphanRows));
 
       // Cancelled orders, deduplicated across the four audits.
       const seenC = new Set(); const cancelledRows = [];
@@ -157,14 +178,20 @@
         .concat((a.soFulfil.noShipRecordRows || []).map(r => r.concat(['Sales order'])))
         .concat((a.toFulfil.noShipRecordRows || []).map(r => r.concat(['Transfer order'])));
       add(wb, 'Fulfilled No AV Shipment',
-        sheet(['Order Number','NetSuite Internal ID','Order Date','NetSuite Status','WMS Status','Order Type','Record'], noShipRows));
+        ()=> sheet(['Order Number','NetSuite Internal ID','Order Date','NetSuite Status','WMS Status','Order Type','Record'], noShipRows));
 
       add(wb, 'Cancelled Excluded',
-        sheet(['Order Number','NetSuite Internal ID','Order Type','Date','NetSuite Status','WMS Status'], cancelledRows));
+        ()=> sheet(['Order Number','NetSuite Internal ID','Order Type','Date','NetSuite Status','WMS Status'], cancelledRows));
 
       const d = new Date();
       const pad = n => String(n).padStart(2,'0');
+      if(failures.length){
+        XLSX.utils.book_append_sheet(wb,
+          XLSX.utils.aoa_to_sheet([['These sheets could not be built:'], ...failures.map(f=>[f])]),
+          'Build Problems');
+      }
       XLSX.writeFile(wb, `BYLT_Integration_Queue_Status_${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}.xlsx`);
+      if(failures.length) alert(`Export built, but ${failures.length} sheet(s) failed. See the "Build Problems" sheet.`);
     } catch(err){
       alert('Could not build the export: ' + err.message);
     } finally {

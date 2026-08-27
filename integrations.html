@@ -75,9 +75,9 @@
           <div class="upload-status" id="status-sync">No file loaded</div>
         </div>
         <div class="upload-box">
-          <label>4 &middot; Avectous Shipments</label>
+          <label>4 &middot; Avectous Shipment Details</label>
           <div style="font-size:11.5px; color:var(--muted); margin-bottom:7px;">
-            The shipments report &mdash; has a <code>LastShipDate</code> column
+            The line-level report &mdash; has a <code>RecordDate</code> column
           </div>
           <input type="file" id="file-ship" accept=".csv,.xls,.xlsx">
           <div class="upload-status" id="status-ship">No file loaded</div>
@@ -122,12 +122,6 @@
             <li>Avectous puts sales and transfer orders in one export, so each NetSuite search is matched against the whole file rather than trusting <code>OrderType</code>.</li>
           </ol>
 
-          <strong style="display:block; margin-top:11px;">The 15-minute queue window</strong>
-          <div style="margin-top:4px;">
-            Anything Avectous shipped on its most recent day is separated out as "shipped today" rather
-            than counted as a failure. Everything older has had far longer than one queue interval to
-            arrive, so it is reported as overdue.
-          </div>
 
           <strong style="display:block; margin-top:11px;">Orders only Avectous has</strong>
           <div style="margin-top:4px;">
@@ -148,7 +142,7 @@
 </main>
 
 <script src="app.js"></script>
-<script src="integrations-export.js"></script>
+<script src="integrations-export.js?v=2"></script>
 <script>
 const files = { so:null, to:null, sync:null, ship:null };
 let current = null, savedAt = null, ranBy = null;
@@ -262,25 +256,85 @@ function auditCard(a, isFulfil){
         <div class="ig-line"><span class="k">${matchLabel}</span><span class="v">${fmt(a.matched)}</span></div>
         <div class="ig-line"><span class="k">Missing</span><span class="v ${a.missing ? 'bad' : ''}">${fmt(a.missing)}</span></div>
         ${a.cancelled ? `<div class="ig-line"><span class="k">Cancelled, excluded</span><span class="v" style="color:var(--muted);">${fmt(a.cancelled)}</span></div>` : ''}
-        ${isFulfil && a.missing ? `
-        <div class="ig-line"><span class="k">&nbsp;&nbsp;shipped today</span><span class="v warn">${fmt(a.sameDay)}</span></div>
-        <div class="ig-line"><span class="k">&nbsp;&nbsp;overdue</span><span class="v bad">${fmt(a.overdue)}</span></div>` : ''}
-        ${isFulfil && a.noShipRecord ? `
-        <div class="ig-line"><span class="k">Fulfilled in NetSuite, no Avectous shipment</span><span class="v warn">${fmt(a.noShipRecord)}</span></div>` : ''}
       </div>
-      ${isFulfil && a.overdue > 0 ? `
+      ${isFulfil && a.missing > 0 ? `
       <div class="ig-flag">
-        <strong>${fmt(a.overdue)} orders shipped on an earlier day and still have no fulfillment in NetSuite.</strong>
-        The queue runs every 15 minutes, so these have had far longer than one cycle to come through.
-      </div>` : ''}
-      ${isFulfil && a.noShipRecord > 0 ? `
-      <div class="ig-flag mild">
-        <strong>${fmt(a.noShipRecord)} orders have a fulfillment in NetSuite but no shipment record in Avectous.</strong>
-        The opposite failure — either fulfilled by hand in NetSuite without the warehouse shipping, or
-        Avectous shipped it and lost the record. Own sheet in the export.
+        ${a.missing === 1
+          ? `Avectous shipped this order, but NetSuite has no fulfillment for it.`
+          : `Avectous shipped these ${fmt(a.missing)} orders, but NetSuite has no fulfillment for them.`}
+        <strong>The customer has the product; NetSuite still shows ${a.missing === 1 ? 'it' : 'them'} as pending, so ${a.missing === 1 ? 'it' : 'they'} can't be invoiced.</strong>
       </div>` : ''}
       ${!isFulfil && a.missing > 0 ? `
-      <div class="ig-flag mild">${fmt(a.missing)} orders exist in NetSuite but not in the Avectous download.</div>` : ''}
+      <div class="ig-flag mild">
+        ${a.missing === 1
+          ? `NetSuite created this order but it never reached Avectous.`
+          : `NetSuite created these ${fmt(a.missing)} orders but they never reached Avectous.`}
+        <strong>The warehouse can't ship what it doesn't have.</strong>
+      </div>` : ''}
+    </div>`;
+}
+
+
+// Avectous's own status for the orders that reached it. Sits below the audit
+// cards because it answers a different question: not "did the handoff work"
+// but "where are the orders now".
+function avStatusSection(res){
+  const a = res.avStatus;
+  if(!a) return '';
+
+  const tone = st => st === 'Shipped' ? 'var(--green)'
+                   : st === 'Waved' ? '#b8730a'
+                   : st === 'New' ? 'var(--red)'
+                   : 'var(--muted)';
+
+  const table = side => `
+    <div>
+      <h4>${side.label} <span>&mdash; ${fmt(side.inAvectous)} in Avectous${side.cancelledExcluded ? `, ${fmt(side.cancelledExcluded)} cancelled excluded` : ''}</span></h4>
+      <table class="av-table">
+        <thead><tr><th>Status</th><th>Means</th><th class="n">Orders</th><th class="n">%</th></tr></thead>
+        <tbody>
+          ${side.rows.map(r=>`
+            <tr class="${r.count ? '' : 'zero'}">
+              <td class="st" style="color:${tone(r.status)};">${r.status}</td>
+              <td class="means">${r.means}</td>
+              <td class="n" style="font-weight:700;">${r.count ? fmt(r.count) : '0'}</td>
+              <td class="n" style="color:var(--muted);">${r.count ? r.pct.toFixed(1) + '%' : '&mdash;'}</td>
+            </tr>`).join('')}
+          ${side.unexpected.map(u=>`
+            <tr>
+              <td class="st" style="color:var(--red);">${escapeHtml(u.status)}</td>
+              <td class="means">Status this tab doesn't recognise</td>
+              <td class="n" style="font-weight:700;">${fmt(u.count)}</td>
+              <td class="n" style="color:var(--muted);">&mdash;</td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>`;
+
+  // Only worth calling out when the two order types are behaving differently.
+  const soShip = a.so.rows.find(r=>r.status === 'Shipped');
+  const toWave = a.to.rows.find(r=>r.status === 'Waved');
+  const callout = (toWave && toWave.pct >= 50 && soShip)
+    ? `<div class="ig-flag mild" style="margin-left:0;">
+         <strong>${toWave.pct.toFixed(1)}% of transfer orders are sitting Waved</strong> &mdash;
+         accepted by Avectous and not yet shipped. Sales orders are ${soShip.pct.toFixed(0)}% shipped by
+         comparison. The orders are in the right place; they aren't moving.
+       </div>` : '';
+
+  return `
+    <div class="os-section">
+      <h3>Where Avectous has the orders</h3>
+      <div class="os-section-sub">
+        Avectous's own status for every order that reached it. Totals match "Reached Avectous" on the
+        cards above &mdash; orders NetSuite has cancelled are excluded from both.
+      </div>
+      <div class="av-split">${table(a.so)}${table(a.to)}</div>
+      ${callout}
+      <div class="av-caveat">
+        "Waved" is Avectous's term and its exact meaning isn't confirmed &mdash; it may mean actively
+        being picked, or simply assigned to a wave that hasn't started. Worth pinning down, since the
+        two readings point in opposite directions.
+      </div>
     </div>`;
 }
 
@@ -293,9 +347,15 @@ function render(){
   }
   document.getElementById('exportBtn').style.display = '';
   const a = current.audits, c = current.counts;
-  const orphanTotal = current.orphans.sync.length + current.orphans.ship.length;
 
   el.innerHTML = `
+    ${current.shipDatesMissing ? `
+    <div class="os-note err" style="margin-bottom:18px;">
+      The shipments file has no recognisable date column, so ship dates are blank and orders can't be
+      aged. Check you loaded the <strong>Shipment Details</strong> report &mdash; the line-level one with
+      a <code>RecordDate</code> column.
+    </div>` : ''}
+
     <div class="ig-src">
       <div class="b"><div class="n">${fmt(c.nsSo)}</div><div class="l">Sales orders — NetSuite 4866${c.nsSoCancelled ? `<br>${fmt(c.nsSoCancelled)} cancelled excluded` : ''}</div></div>
       <div class="b"><div class="n">${fmt(c.nsTo)}</div><div class="l">Transfer orders — NetSuite 4867${c.nsToCancelled ? `<br>${fmt(c.nsToCancelled)} cancelled excluded` : ''}</div></div>
@@ -312,33 +372,7 @@ function render(){
       ${auditCard(a.toFulfil, true)}
     </div>
 
-    ${orphanTotal ? `
-    <div class="os-section">
-      <h3>In Avectous only</h3>
-      <div class="os-section-sub">
-        ${fmt(orphanTotal)} orders have no match in either NetSuite search. Kept out of every percentage above.
-      </div>
-      <table class="os-chan-table">
-        <thead><tr><th>What they are</th><th class="n">Orders</th><th>What to do</th></tr></thead>
-        <tbody>
-          <tr>
-            <td class="os-chan-name">Avectous test orders</td>
-            <td class="n" style="color:var(--red); font-weight:700;">${fmt(current.orphans.tests.length)}</td>
-            <td style="color:var(--muted);">Order numbers containing "TEST". These shouldn't be in a production warehouse &mdash; ask Avectous to clear them.</td>
-          </tr>
-          <tr>
-            <td class="os-chan-name">Created after the NetSuite pull</td>
-            <td class="n" style="color:var(--muted); font-weight:700;">${fmt(current.orphans.newer.length)}</td>
-            <td style="color:var(--muted);">Real orders Avectous is working. The NetSuite export is simply older &mdash; nothing wrong.</td>
-          </tr>
-        </tbody>
-      </table>
-      ${current.orphans.tests.length ? `
-      <div class="ig-flag" style="margin-left:0;">
-        <strong>${fmt(current.orphans.tests.length)} test orders are sitting in the production Avectous warehouse.</strong>
-        Listed on the "In Avectous Only" sheet of the export with a Kind column.
-      </div>` : ''}
-    </div>` : ''}
+    ${avStatusSection(current)}
   `;
 }
 

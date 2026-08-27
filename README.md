@@ -11,89 +11,48 @@ Pages, one password gate:
 
 ## Order Status tab
 
-Two NetSuite exports, uploaded on the tab itself (not on Load Data):
-- Search 4866, `customsearch_fulfillable_orders_final` -> fulfillable sales orders
-- Search 4867, `customsearchfulfillable_to_final`      -> fulfillable transfer orders
+Three uploads: NetSuite sales orders (4866), NetSuite transfer orders (4867),
+and Avectous Shipment Details.
 
-Three counting rules:
+**Two questions per order, and only two.** Did it ship, and when was it created.
 
-**Count distinct orders, not rows.** These searches return one row per
-fulfillment status per order, so a partially shipped order produces two rows.
-Counting rows double-counts it.
+An order counts as **shipped** if it appears in the Avectous shipment file OR has
+a fulfillment in NetSuite. Either one is enough. Avectous is the source of truth
+for goods leaving the building; NetSuite's fulfillment is the accounting record
+and can lag by days, so counting only NetSuite understates reality.
 
-**Key on Internal ID, not PO/Check Number.** Replacement orders inherit the
-original order's Shopify number, so PO/Check Number is not unique.
+Ship date is Avectous `RecordDate` where available, falling back to NetSuite
+`Date Fulfilled`. RecordDate is when the warehouse shipped; Date Fulfilled is
+when NetSuite found out.
 
-**A partially shipped order counts as SHIPPED.** Something physically left the
-building; the outstanding items are a customer-service follow-up, not warehouse
-work in progress. The partial count is reported separately so it stays visible.
+**What this tab deliberately does not do** is judge whether an order *should*
+have shipped. Holds, cancellation states, backorder flags and payment blocks
+answer "why hasn't this shipped" — a different question, and one that belongs on
+Integrations Status. An earlier version bucketed orders into ready/held/cancelled
+and it made the five numbers people actually asked for harder to find.
 
-That gives two states, not three: shipped (any Fulfilled line) and not shipped
-(every line Unfulfilled). They always sum to the order count; the tab shows a
-red warning if they ever don't.
+### The five metrics
 
-Baseline from the 21 Aug 2026 exports:
+1. **Total, shipped, not shipped** with percentages, combined and per order type.
+2. **How far behind** — orders grouped by creation date. The most recent day at
+   90%+ shipped is the last day cleared; the gap from there to today is the lag.
+   Days under 50 orders are skipped so a quiet day can't set the line.
+3. **By channel** — sales orders read `Order Source`, transfer orders read
+   `Channel`. The All channels row always matches the card above.
+4. **Shipped per day** — counted on the day Avectous shipped.
 
-| | Total | Shipped | of which partial | Not shipped |
-|---|---|---|---|---|
-| 810 Texas DC | 21,837 | 11,804 | 215 | 10,033 |
-| Sales orders | 20,106 | 11,596 | 7 | 8,510 |
-| Transfer orders | 1,731 | 208 | 208 | 1,523 |
+Baseline from the 27 Aug files: 32,167 orders, 24,232 shipped (75.3%). Sales
+orders 78.8% shipped and 4 days behind; transfer orders 20.5% shipped and 17 days
+behind.
 
-### There is no SLA target in this data
+### Counting rules
 
-Ship By Date is blank on every transfer order and 569 sales orders. Where it is
-populated it is identical to Ship Date on 100% of rows, and Ship Date is itself
-identical to the order date on 99.5% of rows. None of these columns carries a
-promised ship date.
+Orders are grouped by `Internal ID`, so an order with several rows counts once.
+Matching to Avectous uses `PO/Check Number` for sales orders and
+`Document Number` for transfer orders, because those are what Avectous stores.
 
-So the tab measures what actually happened rather than performance against a
-target:
-
-- **Days to ship** — order date to Date Fulfilled, for orders that shipped.
-  Sales orders run a median of 3 days, 90% within 8.
-- **Days waiting** — order date to today, for orders with nothing shipped.
-- **The "beyond normal" line** is the 90th percentile of actual ship time, not
-  an invented threshold. Anything past it is an outlier by the warehouse's own
-  pace.
-
-Do not reintroduce an order-date-based "how late are we" metric. Order date is
-the wrong clock: an EDI order placed in March with a ship date of 1 Aug is
-20 days late, not 164.
-
-### Sections on the tab, in order
-
-1. Hero tiles — total, shipped, not shipped
-2. Sales orders card / Transfer orders card
-3. Sales orders by channel
-4. Transfer orders by channel
-5. Sales orders shipped per day
-6. Transfer orders shipped per day
-7. Update these numbers (collapsed)
-
-Ship time and queue age are reported as one line each on the cards —
-"typical time to ship" (median) and "waiting over N days", where N is the 90th
-percentile of actual ship time. Full percentile grids were tried and removed:
-four panels to answer two questions was too much for the audience.
-
-Partial orders are not shown on the page at all. They count as shipped, they
-change no total, and calling them out on every table added a column nobody
-needed. The `Partial` field survives in the export ledger, so the detail is
-still auditable.
-
-### Show your work
-
-The dashboard itself stays clean — no methodology disclosures on the page, so
-it reads as a finished report rather than a worked example. The full set of
-counting rules lives inside the collapsed "Update these numbers" panel, which
-only whoever refreshes the data opens, along with a live readout of which
-columns were detected on the last run. The **Export proof** button in the header builds a workbook
-with a Summary & Method sheet and one row per order in a filterable ledger, so
-anyone can rebuild the figures without trusting the dashboard. The ledger is
-kept in the shared copy; if the browser's local storage runs out it is the first
-thing dropped, and the export says so rather than exporting a partial file.
-
-The upload panel is collapsed by default. Click "Update these numbers" to open it.
+All three files must be pulled at the same time. Pull NetSuite at 9am and
+Avectous at 11am and anything shipped in between looks unshipped.
 
 ## Integrations Status tab
 
@@ -171,8 +130,10 @@ both against Avectous `OrderNumber`. Avectous mixes both order types into one
 export, so each NetSuite search is matched against the whole file rather than
 trusting `OrderType`.
 
-Orders present only in Avectous are listed separately and never included in a
-health percentage. Two different things end up here and the tab separates them:
+Orders present only in Avectous are excluded from every health percentage and no
+longer shown on the tab — they were noise once the Avectous export started
+covering a wider window than the NetSuite searches. They remain on the
+"In Avectous Only" sheet of the export, split by Kind:
 
 - **Avectous test orders** — the order number contains TEST (`SHPYTEST31`,
   `GOLIVETEST36`). These should not exist in a production warehouse. 14 on the
@@ -183,6 +144,25 @@ health percentage. Two different things end up here and the tab separates them:
 
 Lumping them together hides test pollution behind a timing artefact, which is
 why the export carries a Kind column.
+
+### Where Avectous has the orders
+
+A section below the four audit cards showing Avectous's own status for every
+order that reached it: Shipped, Waved, New, Cancelled. The cards ask whether the
+handoff worked; this asks where the orders actually are.
+
+Totals match "Reached Avectous" on the cards — orders NetSuite has cancelled are
+excluded from both, so the two never disagree.
+
+**"Waved" is unconfirmed.** It's Avectous's term and may mean actively being
+picked, or simply assigned to a wave that hasn't started. The data says only that
+it's a pre-shipment state further along than New: 6 of 7,406 Waved orders appear
+in the shipments file, and New orders are all under 7 days old while Waved
+stretches to 25. Worth confirming with Avectous, since the two readings point in
+opposite directions. Labelled "Queued, not yet shipped" until then.
+
+Any status value Avectous starts using that isn't one of the four appears as its
+own red row rather than being dropped.
 
 ### The export
 
@@ -270,3 +250,36 @@ These are filtered out at render time via `HEALTH_SECTION_IDS`, not deleted from
 `SECTIONS` — Load Data and Totals still drive off the full list, so nothing
 became unloadable. The overview bar is still built and simply not inserted, so
 restoring it is one commented line in `renderScorecard`.
+
+
+## A bug worth remembering
+
+The Integrations tab once read ship dates from `LastShipDate` only. When Order
+Status moved to the Shipment Details report (`RecordDate`), Integrations was not
+updated — so no column matched, every ship date came back blank, and the blank
+date then broke the export builder partway through. The workbook silently
+produced 3 sheets instead of 9.
+
+Two lessons baked in since: the date column list accepts both names, and if no
+date column is found at all the tab shows a red warning rather than a column of
+blanks. A missing date now reports as Age "Unknown" instead of being labelled
+"Overdue", which was a guess dressed up as a fact.
+
+
+## If an export comes back with missing sheets
+
+`integrations-export.js` is a separate file from the HTML, so a browser can serve
+a stale copy of it while the page itself is current. That produced a 3-sheet
+workbook with no Summary sheet, which looked like the export had truncated.
+
+Two guards now:
+
+- The script is loaded as `integrations-export.js?v=2`, so bumping that number
+  forces browsers to refetch it after any change to the file.
+- The Summary sheet ends with an "Export built ... workbook version 2" line. If
+  that line is missing from a workbook, the browser was running an old copy of
+  the script — hard-refresh the page.
+
+Each sheet is also built inside its own try/catch. A sheet that fails now leaves
+a placeholder and a "Build Problems" sheet listing what went wrong, rather than
+silently costing you every sheet after it.

@@ -1158,322 +1158,204 @@ function isCancelled(wmsValue, statusValue){
          CANCELLED_NS_STATUSES.some(x => norm(x) === t);
 }
 
-const ORDER_STATUS = {
-  id:'order_status',
-  title:'Order Status — 810 Texas DC',
-  so:{
-    label:'Fulfillable Sales Orders',
-    filePrefix:'BYLTFulfillableSalesOrdersResults',
-    savedSearch:'customsearch_fulfillable_orders_final',
-    url:'https://11170298.app.netsuite.com/app/common/search/savedsearchresults.nl?searchid=4866&saverun=T&whence=',
-    keyField:['Internal ID','PO/Check Number'],
-    statusField:['Fulfillment Status','Status'],
-    dateField:['Date'],
-    channelField:['Order Type','Channel'],
-    fulfilledDateField:['Date Fulfilled'],
-    docField:['PO/Check Number'],
-    shipByField:['Ship Date','Ship by Date']
-  },
-  to:{
-    label:'Fulfillable Transfer Orders',
-    filePrefix:'BYLTFulfillableTransferOrdersResults',
-    savedSearch:'customsearchfulfillable_to_final',
-    url:'https://11170298.app.netsuite.com/app/common/search/savedsearchresults.nl?searchid=4867&saverun=T&whence=',
-    keyField:['Internal ID','Document Number'],
-    statusField:['Fulfillment Status','Status'],
-    dateField:['Date'],
-    channelField:['Channel','To Location'],
-    fulfilledDateField:['Date Fulfilled'],
-    docField:['Document Number'],
-    shipByField:['Ship Date','Ship by Date']
-  },
-  fulfilledValue:'Fulfilled',
-  unfulfilledValue:'Unfulfilled'
-};
-
 // Normalises a date cell to YYYY-MM-DD, or null if it isn't a real date.
-// NetSuite writes "None" into empty date columns rather than leaving them blank.
+// NetSuite writes the literal string "None" into empty date columns rather
+// than leaving them blank.
 function isoDay(raw){
   if(raw === null || raw === undefined) return null;
   const str = String(raw).trim();
-  if(!str || norm(str) === 'none') return null;
+  if(!str || norm(str) === 'none' || str === '- None -') return null;
   const d = parseDateRobust(raw);
   if(!d || isNaN(d.getTime()) || d.getFullYear() < 2000) return null;
   const pad = n => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
 }
 
-// Groups rows by order and assigns each order exactly one state.
+const ORDER_STATUS = {
+  id:'order_status',
+  title:'Order Status — 810 Texas DC',
+  so:{
+    label:'Fulfillable Sales Orders', search:'4866',
+    url:'https://11170298.app.netsuite.com/app/common/search/savedsearchresults.nl?searchid=4866&saverun=T&whence=',
+    keyField:['Internal ID'],
+    docField:['PO/Check Number'],
+    dateField:['Date'],
+    channelField:['Order Source','Order Type','Channel'],
+    statusField:['Fulfillment Status'],
+    fulfilledDateField:['Date Fulfilled']
+  },
+  to:{
+    label:'Fulfillable Transfer Orders', search:'4867',
+    url:'https://11170298.app.netsuite.com/app/common/search/savedsearchresults.nl?searchid=4867&saverun=T&whence=',
+    keyField:['Internal ID'],
+    docField:['Document Number'],
+    dateField:['Date'],
+    channelField:['Channel','To Location'],
+    statusField:['Fulfillment Status'],
+    fulfilledDateField:['Date Fulfilled']
+  },
+  // Avectous's Shipment Details report. Gives two things: which orders
+  // physically shipped, and the day they shipped (RecordDate).
+  shipments:{
+    label:'Avectous Shipment Details',
+    keyField:['OrderNumber'],
+    dateField:['RecordDate','LastShipDate']
+  },
+  fulfilledValue:'Fulfilled',
+  unfulfilledValue:'Unfulfilled'
+};
+
+// Which orders Avectous shipped, and when. Line-level report, so an order
+// appears once per line — the order shipped on the last of them.
+function avectousShippedKeys(data){
+  if(!data || !data.rows || !data.rows.length) return null;
+  const col = guessColumn(data.headers, ORDER_STATUS.shipments.keyField);
+  if(!col) return { error:`Could not find an "OrderNumber" column in the shipments file. Columns found: ${data.headers.join(', ')}` };
+  const dateCol = guessColumn(data.headers, ORDER_STATUS.shipments.dateField);
+  const days = new Map();
+  data.rows.forEach(row=>{
+    const k = String(row[col] ?? '').trim();
+    if(!k) return;
+    const d = dateCol ? isoDay(row[dateCol]) : null;
+    const prev = days.get(k);
+    if(prev === undefined || (d && (!prev || d > prev))) days.set(k, d || prev || null);
+  });
+  return { set:new Set(days.keys()), days, keyColumn:col, dateColumn:dateCol || null, hasDates:!!dateCol };
+}
+
+// Two questions per order, and only two: did it ship, and when was it created.
 //
-// A partially shipped order counts as SHIPPED. Something physically left the
-// building, and the outstanding items become a customer-service follow-up
-// rather than warehouse work in progress. The partial count is still reported
-// separately so it never disappears.
+// Shipped means EITHER system says so. Avectous is the source of truth for
+// whether goods left the building; NetSuite's fulfillment is the accounting
+// record and can lag by days. Counting only NetSuite understates reality.
 //
-// Returns per-order detail as well as counts, so every number on screen can be
-// exported back to the exact orders that produced it.
-function computeOrderStatusSide(data, cfg){
+// Nothing here judges whether an order *should* have shipped — no holds, no
+// gates, no cancellation logic. Those answer "why hasn't this shipped", which
+// is a different question and lives on the Integrations tab.
+function computeOrderStatusSide(data, cfg, avShipped, avDays){
   if(!data || !data.rows || !data.rows.length) return null;
 
-  const keyCol    = guessColumn(data.headers, cfg.keyField);
-  const statusCol = guessColumn(data.headers, cfg.statusField);
-  const dateCol   = guessColumn(data.headers, cfg.dateField);
-  const chanCol   = guessColumn(data.headers, cfg.channelField);
-  const fulDateCol= guessColumn(data.headers, cfg.fulfilledDateField);
-  const docCol    = guessColumn(data.headers, cfg.docField);
-  const wmsCol    = guessColumn(data.headers, ['WMS Status']);
-  const nsStCol   = guessColumn(data.headers, ['Status']);
-  const shipByCol = guessColumn(data.headers, cfg.shipByField);
+  const keyCol   = guessColumn(data.headers, cfg.keyField);
+  const docCol   = guessColumn(data.headers, cfg.docField);
+  const dateCol  = guessColumn(data.headers, cfg.dateField);
+  const statusCol= guessColumn(data.headers, cfg.statusField);
+  const chanCol  = guessColumn(data.headers, cfg.channelField);
+  const fulDateCol = guessColumn(data.headers, cfg.fulfilledDateField);
 
   if(!keyCol || !statusCol){
-    return {
-      error:`Could not find the columns needed. Looked for a key like "${[].concat(cfg.keyField).join('" or "')}" and a status like "${[].concat(cfg.statusField).join('" or "')}". Columns found: ${data.headers.join(', ')}`
-    };
+    return { error:`Could not find the columns needed. Looked for "${[].concat(cfg.keyField).join('" or "')}" and "${[].concat(cfg.statusField).join('" or "')}". Columns found: ${data.headers.join(', ')}` };
   }
 
   const F = norm(ORDER_STATUS.fulfilledValue);
-  const U = norm(ORDER_STATUS.unfulfilledValue);
-  const BLANK = '- None -';
-
   const orders = new Map();
-  const unrecognised = new Set();
 
   data.rows.forEach(row=>{
     const key = String(row[keyCol] ?? '').trim();
     if(!key) return;
     let o = orders.get(key);
     if(!o){
-      o = { f:false, u:false, rows:0, orderDay:null, shipByDay:null, fulfilledDay:null, channel:null, doc:null, cancelled:false };
+      o = { doc:null, day:null, chan:null, nsFulfilled:false, nsDay:null };
       orders.set(key, o);
     }
-    if(!o.cancelled && isCancelled(wmsCol ? row[wmsCol] : '', nsStCol ? row[nsStCol] : '')){
-      o.cancelled = true;
-    }
-    o.rows++;
-
-    const st = norm(row[statusCol]);
-    if(st === F){
-      o.f = true;
-      if(fulDateCol){
-        const fd = isoDay(row[fulDateCol]);
-        if(fd && (!o.fulfilledDay || fd > o.fulfilledDay)) o.fulfilledDay = fd;
-      }
-    }
-    else if(st === U) o.u = true;
-    else if(st) unrecognised.add(String(row[statusCol]).trim());
-
-    if(dateCol && !o.orderDay) o.orderDay = isoDay(row[dateCol]);
-    if(shipByCol && !o.shipByDay) o.shipByDay = isoDay(row[shipByCol]);
     if(docCol && !o.doc){
       const dv = String(row[docCol] ?? '').trim();
       if(dv) o.doc = dv;
     }
-    if(chanCol && (!o.channel || o.channel === BLANK)){
+    if(dateCol && !o.day) o.day = isoDay(row[dateCol]);
+    if(chanCol && !o.chan){
       const c = String(row[chanCol] ?? '').trim();
-      if(c) o.channel = c;
+      if(c) o.chan = c;
+    }
+    if(norm(row[statusCol]) === F){
+      o.nsFulfilled = true;
+      if(fulDateCol){
+        const fd = isoDay(row[fulDateCol]);
+        if(fd && (!o.nsDay || fd > o.nsDay)) o.nsDay = fd;
+      }
     }
   });
 
-  const todayIso = isoToday();
-  const dayDiff = (a, b) => Math.round((Date.parse(b + 'T00:00:00') - Date.parse(a + 'T00:00:00')) / 86400000);
-
-  // Which day an order belongs to on the backlog view.
-  //
-  // Ship Date rather than order date, because a prebook placed in March with
-  // an August ship date is due in August, not five months overdue.
-  //
-  // But floored at the order date: a replacement order inherits the original's
-  // ship date, so an order created on the 21st can carry a ship date of the
-  // 8th. Left alone that would show as two weeks late the moment CX creates
-  // it, and would dirty days that are otherwise clean.
-  const dueDay = o => {
-    if(!o.shipByDay) return o.orderDay;
-    if(!o.orderDay) return o.shipByDay;
-    return o.shipByDay > o.orderDay ? o.shipByDay : o.orderDay;
-  };
-
-  let shipped = 0, notShipped = 0, partial = 0, unknown = 0, cancelled = 0;
-  const byDueDay = {};
+  let shipped = 0, notShipped = 0;
+  const byCreatedDay = {};   // creation day -> { total, shipped }
+  const byShipDay = {};      // ship day -> count
   const byChannel = {};
-  const byOrderDay = {};
-  const byFulfilledDay = {};
-  const slaDays = [];
-  const ageDays = [];
   const ledger = [];
+  const BLANK = 'Not set';
 
   orders.forEach((o, key)=>{
-    if(o.cancelled){
-      cancelled++;
-      ledger.push([key, o.doc || '', o.orderDay || '', o.fulfilledDay || '',
-                   o.channel || BLANK, 'cancelled', 0, null, null, o.rows]);
-      return;
-    }
-    let state;
-    if(o.f){ state = 'shipped'; shipped++; if(o.u) partial++; }
-    else if(o.u){ state = 'notShipped'; notShipped++; }
-    else { state = 'unknown'; unknown++; }
+    const avDay = (avDays && o.doc) ? (avDays.get(o.doc) || null) : null;
+    const inAv  = !!(avShipped && o.doc && avShipped.has(o.doc));
+    const didShip = o.nsFulfilled || inAv;
+    // Avectous first: it records when goods actually left, where NetSuite
+    // records when it found out.
+    const shipDay = avDay || o.nsDay || null;
 
-    const ch = o.channel || BLANK;
-    if(!byChannel[ch]) byChannel[ch] = { shipped:0, partial:0, notShipped:0, total:0 };
+    if(didShip) shipped++; else notShipped++;
+
+    if(o.day){
+      if(!byCreatedDay[o.day]) byCreatedDay[o.day] = { total:0, shipped:0 };
+      byCreatedDay[o.day].total++;
+      if(didShip) byCreatedDay[o.day].shipped++;
+    }
+    if(didShip && shipDay) byShipDay[shipDay] = (byShipDay[shipDay] || 0) + 1;
+
+    const ch = o.chan || BLANK;
+    if(!byChannel[ch]) byChannel[ch] = { total:0, shipped:0, notShipped:0 };
     byChannel[ch].total++;
-    if(state === 'shipped'){ byChannel[ch].shipped++; if(o.u) byChannel[ch].partial++; }
-    else if(state === 'notShipped') byChannel[ch].notShipped++;
+    if(didShip) byChannel[ch].shipped++; else byChannel[ch].notShipped++;
 
-    if(o.orderDay){
-      if(!byOrderDay[o.orderDay]) byOrderDay[o.orderDay] = { shipped:0, open:0 };
-      if(state === 'shipped') byOrderDay[o.orderDay].shipped++;
-      else byOrderDay[o.orderDay].open++;
-    }
-    const due = dueDay(o);
-    if(due){
-      if(!byDueDay[due]) byDueDay[due] = { total:0, shipped:0, open:0 };
-      byDueDay[due].total++;
-      if(state === 'shipped') byDueDay[due].shipped++;
-      else byDueDay[due].open++;
-    }
-    if(o.fulfilledDay) byFulfilledDay[o.fulfilledDay] = (byFulfilledDay[o.fulfilledDay] || 0) + 1;
-
-    // SLA is measured, not promised: neither saved search carries a due date,
-    // so the only honest measure is how long the warehouse actually took.
-    let sla = null, age = null;
-    if(state === 'shipped' && o.orderDay && o.fulfilledDay){
-      sla = dayDiff(o.orderDay, o.fulfilledDay);
-      if(sla >= 0) slaDays.push(sla); else sla = null;
-    }
-    if(state === 'notShipped' && o.orderDay){
-      age = dayDiff(o.orderDay, todayIso);
-      if(age >= 0) ageDays.push(age); else age = null;
-    }
-
-    ledger.push([
-      key, o.doc || '', o.orderDay || '', o.fulfilledDay || '',
-      ch, state, o.u && o.f ? 1 : 0, sla, age, o.rows
-    ]);
+    ledger.push([key, o.doc || '', o.day || '', didShip ? 'Shipped' : 'Not shipped',
+                 shipDay || '', ch, o.nsFulfilled ? 'Yes' : 'No', inAv ? 'Yes' : 'No']);
   });
 
-  slaDays.sort((a,b)=>a-b);
-  ageDays.sort((a,b)=>a-b);
-
   return {
-    keyColumn: keyCol,
-    statusColumn: statusCol,
-    channelColumn: chanCol || null,
+    keyColumn: keyCol, docColumn: docCol || null, channelColumn: chanCol || null,
     dateColumn: dateCol || null,
-    fulfilledDateColumn: fulDateCol || null,
     totalRows: data.rows.length,
-    totalOrders: orders.size - cancelled,
-    ordersInFile: orders.size,
-    cancelled,
-    shipped, notShipped, partial, unknown,
-    byChannel, byOrderDay, byFulfilledDay,
-    backlog: backlogSummary(byDueDay),
-    shipByColumn: shipByCol || null,
-    sla: summariseDays(slaDays, SLA_BUCKETS),
-    age: summariseDays(ageDays, AGE_BUCKETS),
+    totalOrders: orders.size,
+    shipped, notShipped,
+    pctShipped: orders.size ? (shipped / orders.size) * 100 : 0,
+    byCreatedDay, byShipDay, byChannel,
+    behind: behindSummary(byCreatedDay),
     ledger,
-    duplicateRowCount: data.rows.length - orders.size,
-    unrecognisedStatuses: [...unrecognised].slice(0, 20),
-    reconciles: (shipped + notShipped + unknown + cancelled) === orders.size
+    reconciles: (shipped + notShipped) === orders.size
   };
 }
 
-// Turns the per-day map into phase bands plus the boundaries that matter.
+// How far behind the warehouse is, measured on order creation date.
 //
-// Every unshifted order appears somewhere: the recent window gets its own
-// bands, and everything older is folded into a single "Older" band rather
-// than a footnote, so the bands always total the card above.
-function backlogSummary(byDueDay){
+// Walk backwards from today. The most recent day at 90%+ shipped is the last
+// day the warehouse has cleared; the gap from there to today is how far behind
+// it is. Days under 50 orders are ignored so a quiet day can't set the line.
+function behindSummary(byCreatedDay){
   const today = isoToday();
-  const days = Object.keys(byDueDay).filter(d => d <= today).sort();
-  const futureKeys = Object.keys(byDueDay).filter(d => d > today);
-  const future     = futureKeys.reduce((n,d)=> n + byDueDay[d].total, 0);
-  const futureOpen = futureKeys.reduce((n,d)=> n + byDueDay[d].open, 0);
-  if(!days.length){
-    return { days:[], bands:[], caughtUpThrough:null, nothingSince:null,
-             future:0, totalOpen:0, totalOrders:0, totalPct:0,
-             totalOpenAll:0, totalPctAll:0 };
-  }
+  const days = Object.keys(byCreatedDay).filter(d => d <= today).sort();
+  if(!days.length) return null;
 
   const series = days.map(d=>({
-    day: d,
-    total: byDueDay[d].total,
-    shipped: byDueDay[d].shipped,
-    open: byDueDay[d].open,
-    pct: byDueDay[d].total ? (byDueDay[d].shipped / byDueDay[d].total) * 100 : 0
+    day: d, total: byCreatedDay[d].total, shipped: byCreatedDay[d].shipped,
+    notShipped: byCreatedDay[d].total - byCreatedDay[d].shipped,
+    pct: byCreatedDay[d].total ? (byCreatedDay[d].shipped / byCreatedDay[d].total) * 100 : 0
   }));
 
-  // Boundary detection ignores tiny days: a 2-order day at 0% shouldn't
-  // decide where the warehouse has got to.
-  const MIN_VOLUME = 50;
+  const MIN_VOLUME = 50, CLEARED = 90;
   const solid = series.filter(s => s.total >= MIN_VOLUME);
-
-  // 93 rather than 95, because a day sitting at 94% is part of the cleared
-  // run in practice and a tighter threshold splits one clean stretch into
-  // three bands that read like a problem.
-  const CLEARED_PCT = 93;
-
   let caughtUpThrough = null;
   for(let i = solid.length - 1; i >= 0; i--){
-    if(solid[i].pct >= CLEARED_PCT){ caughtUpThrough = solid[i].day; break; }
+    if(solid[i].pct >= CLEARED){ caughtUpThrough = solid[i].day; break; }
   }
+  const daysBehind = caughtUpThrough
+    ? Math.round((Date.parse(today + 'T00:00:00') - Date.parse(caughtUpThrough + 'T00:00:00')) / 86400000)
+    : null;
 
-  let nothingSince = null;
-  for(let i = solid.length - 1; i >= 0; i--){
-    if(solid[i].pct < 1) nothingSince = solid[i].day;
-    else break;
-  }
-
-  const WINDOW = 18;
-  const shown = series.slice(-WINDOW);
-  const older = series.slice(0, Math.max(0, series.length - WINDOW));
-
-  const levelOf = p => p >= CLEARED_PCT ? 'cleared' : p < 1 ? 'notstarted' : 'progress';
-  const LABELS = { cleared:'Cleared', progress:'Part way through', notstarted:'Not started' };
-
-  const bands = [];
-  const push = (level, label, from, to, dayCount, total, shipped, open, muted) => {
-    bands.push({ level, label, from, to, dayCount, total, shipped, open, muted:!!muted,
-                 pct: total ? (shipped / total) * 100 : 0 });
-  };
-
-  if(older.length){
-    push('older', 'Older', older[0].day, older[older.length-1].day, older.length,
-         older.reduce((n,s)=>n+s.total,0), older.reduce((n,s)=>n+s.shipped,0),
-         older.reduce((n,s)=>n+s.open,0), true);
-  }
-
-  shown.forEach(d=>{
-    const level = levelOf(d.pct);
-    const last = bands[bands.length - 1];
-    if(last && last.level === level && !last.muted){
-      last.to = d.day; last.dayCount++;
-      last.total += d.total; last.shipped += d.shipped; last.open += d.open;
-      last.pct = last.total ? (last.shipped / last.total) * 100 : 0;
-    } else {
-      push(level, LABELS[level], d.day, d.day, 1, d.total, d.shipped, d.open);
-    }
-  });
-
-  const totalOrders = series.reduce((n,s)=>n+s.total,0);
-  const totalOpen   = series.reduce((n,s)=>n+s.open,0);
-
-  // Two totals: the bands cover due dates up to today, but the card counts
-  // every unshipped order including pre-orders not due yet. The "All orders"
-  // row uses the wider figure so it ties to the card exactly.
-  const totalOrdersAll = totalOrders + future;
-  const totalOpenAll   = totalOpen + futureOpen;
+  const openAfter = caughtUpThrough
+    ? series.filter(s => s.day > caughtUpThrough).reduce((n,s)=> n + s.notShipped, 0)
+    : series.reduce((n,s)=> n + s.notShipped, 0);
 
   return {
-    days: shown,
-    bands,
-    caughtUpThrough,
-    nothingSince,
-    future: futureOpen,
-    totalOrders,
-    totalOpen,
-    totalPct: totalOrders ? ((totalOrders - totalOpen) / totalOrders) * 100 : 0,
-    totalOpenAll,
-    totalPctAll: totalOrdersAll ? ((totalOrdersAll - totalOpenAll) / totalOrdersAll) * 100 : 0
+    days: series.slice(-21),
+    caughtUpThrough, daysBehind, openAfter, today,
+    totalOpen: series.reduce((n,s)=> n + s.notShipped, 0)
   };
 }
 
@@ -1546,39 +1428,28 @@ function mergeDaySeries(a, b, fields){
   return out;
 }
 
-function computeOrderStatus(soData, toData){
-  const so = computeOrderStatusSide(soData, ORDER_STATUS.so);
-  const to = computeOrderStatusSide(toData, ORDER_STATUS.to);
+function computeOrderStatus(soData, toData, shipData){
+  const av = shipData ? avectousShippedKeys(shipData) : null;
+  const avSet  = av && !av.error ? av.set  : null;
+  const avDays = av && !av.error ? av.days : null;
 
-  const sum = (a, b, f) => {
-    const x = (a && !a.error) ? a[f] : 0;
-    const y = (b && !b.error) ? b[f] : 0;
-    return x + y;
-  };
+  const so = computeOrderStatusSide(soData, ORDER_STATUS.so, avSet, avDays);
+  const to = computeOrderStatusSide(toData, ORDER_STATUS.to, avSet, avDays);
 
-  const soOk = so && !so.error ? so : null;
-  const toOk = to && !to.error ? to : null;
+  const sum = f => ((so && !so.error ? so[f] : 0) + (to && !to.error ? to[f] : 0));
+  const totalOrders = sum('totalOrders');
+  const shipped = sum('shipped');
 
   return {
     so, to,
     total:{
-      totalOrders: sum(so, to, 'totalOrders'),
-      totalRows:   sum(so, to, 'totalRows'),
-      cancelled:   sum(so, to, 'cancelled'),
-      shipped:     sum(so, to, 'shipped'),
-      partial:     sum(so, to, 'partial'),
-      notShipped:  sum(so, to, 'notShipped'),
-      unknown:     sum(so, to, 'unknown')
+      totalOrders, shipped,
+      notShipped: sum('notShipped'),
+      totalRows: sum('totalRows'),
+      pctShipped: totalOrders ? (shipped / totalOrders) * 100 : 0
     },
-    backlog: mergeDaySeries(
-      soOk && soOk.byOrderDay,
-      toOk && toOk.byOrderDay,
-      ['shipped','open']
-    ),
-    beyondNormal: {
-      so: beyondNormal(soOk),
-      to: beyondNormal(toOk)
-    },
+    shipmentsFile: av ? (av.error ? { error: av.error }
+      : { orders: av.set.size, dateColumn: av.dateColumn, hasDates: av.hasDates }) : null,
     computedAt: isoToday()
   };
 }
@@ -1638,8 +1509,8 @@ const INTEGRATIONS = {
          keyField:['Document Number'], hint:'BYLTFulfillableTransferOrdersResults' },
     sync:{ label:'Avectous Orders', hint:'Orders(...).xlsx — the order download',
            keyField:['OrderNumber'] },
-    ship:{ label:'Avectous Shipments', hint:'Orders(...).xlsx — the shipments report',
-           keyField:['OrderNumber'], dateField:['LastShipDate'] }
+    ship:{ label:'Avectous Shipment Details', hint:'the line-level report with a RecordDate column',
+           keyField:['OrderNumber'], dateField:['RecordDate','LastShipDate'] }
   }
 };
 
@@ -1701,7 +1572,7 @@ function avOrderIndex(data, cfg){
       o.day = day;
     }
   });
-  return { byKey, keyColumn:keyCol, latestDay: [...byKey.values()].reduce((a,o)=> (o.day && (!a || o.day > a)) ? o.day : a, null) };
+  return { byKey, keyColumn:keyCol, dateColumn: dateCol || null, latestDay: [...byKey.values()].reduce((a,o)=> (o.day && (!a || o.day > a)) ? o.day : a, null) };
 }
 
 function countLive(side){
@@ -1731,6 +1602,9 @@ function computeIntegrations(soData, toData, syncData, shipData){
   if(!ns.so || !ns.to || !av.sync || !av.ship) return { error:'All four files are needed.' };
 
   const today = av.ship.latestDay || isoToday();
+  // If the shipments file yielded no dates at all, the age split is meaningless
+  // and the tab should say so rather than showing a column of blanks.
+  const shipDatesMissing = !av.ship.dateColumn;
 
   // NetSuite -> Avectous. Every order NetSuite holds should be in the download.
   function syncAudit(nsSide, label){
@@ -1777,9 +1651,12 @@ function computeIntegrations(soData, toData, syncData, shipData){
       }
       shipped++;
       if(o.fulfilled){ recorded++; return; }
+      // No ship date means the shipments file had no recognisable date column,
+      // so age can't be judged. Labelling it "Overdue" would be a guess.
       const isToday = a.day && a.day >= today;
       if(isToday) sameDay++;
-      missing.push([o.key, o.id, a.day || '', o.orderDay || '', o.status, o.wms, isToday ? 'Today' : 'Overdue']);
+      const age = !a.day ? 'Unknown' : (isToday ? 'Today' : 'Overdue');
+      missing.push([o.key, o.id, a.day || '', o.orderDay || '', o.status, o.wms, age]);
     });
     missing.sort((a,b)=> String(a[2]).localeCompare(String(b[2])));
     noShipRecord.sort((a,b)=> String(a[2]).localeCompare(String(b[2])));
@@ -1788,6 +1665,52 @@ function computeIntegrations(soData, toData, syncData, shipData){
              cancelled: cancelledRows.length, cancelledRows,
              noShipRecord: noShipRecord.length, noShipRecordRows: noShipRecord,
              health: pctOf(recorded, shipped), rows: missing };
+  }
+
+  // Avectous's own status for every NetSuite order that reached it.
+  //
+  // Answers a different question from the audit cards above: those ask whether
+  // the handoff worked, this asks where the orders actually are. Cancelled
+  // orders are included, because Avectous cancelling something is a status
+  // worth seeing even though it's excluded from queue health.
+  const AV_STATUS_ORDER = [
+    { key:'Shipped',   means:'Out the door' },
+    { key:'Waved',     means:'Queued, not yet shipped' },
+    { key:'New',       means:'Just received' },
+    { key:'Cancelled', means:'Avectous cancelled it' }
+  ];
+
+  function avStatusTable(nsSide, label){
+    const counts = {};
+    let inAvectous = 0;
+    const other = {};
+    let cancelledHere = 0;
+    nsSide.byKey.forEach(o=>{
+      const a = av.sync.byKey.get(o.key);
+      if(!a) return;
+      // Cancelled orders are excluded from the audit cards, so count them
+      // separately here — otherwise this total silently disagrees with
+      // "Reached Avectous" on the card above and looks like a bug.
+      if(o.cancelled){ cancelledHere++; return; }
+      inAvectous++;
+      const st = (a.status || '').trim();
+      const known = AV_STATUS_ORDER.find(x => norm(x.key) === norm(st));
+      if(known) counts[known.key] = (counts[known.key] || 0) + 1;
+      else if(st) other[st] = (other[st] || 0) + 1;
+      else counts['(blank)'] = (counts['(blank)'] || 0) + 1;
+    });
+    return {
+      label,
+      inAvectous,
+      cancelledExcluded: cancelledHere,
+      rows: AV_STATUS_ORDER.map(x=>({
+        status: x.key, means: x.means,
+        count: counts[x.key] || 0,
+        pct: inAvectous ? ((counts[x.key] || 0) / inAvectous) * 100 : 0
+      })),
+      // Any status value Avectous starts using that we haven't accounted for.
+      unexpected: Object.entries(other).map(([k,v])=>({ status:k, count:v }))
+    };
   }
 
   // Anything Avectous holds that neither NetSuite search knows about.
@@ -1817,6 +1740,8 @@ function computeIntegrations(soData, toData, syncData, shipData){
   return {
     computedAt: new Date().toISOString(),
     avectousThrough: today,
+    shipDatesMissing,
+    shipDateColumn: av.ship.dateColumn || null,
     audits:{
       soSync:   syncAudit(ns.so, 'Sales order sync'),
       toSync:   syncAudit(ns.to, 'Transfer order sync'),
@@ -1824,6 +1749,10 @@ function computeIntegrations(soData, toData, syncData, shipData){
       toFulfil: fulfilAudit(ns.to, 'Transfer order fulfillments')
     },
     orphans,
+    avStatus:{
+      so: avStatusTable(ns.so, 'Sales orders'),
+      to: avStatusTable(ns.to, 'Transfer orders')
+    },
     counts:{
       // Cancelled orders are excluded from every audit below, so the source
       // tiles must exclude them too — otherwise the headline count disagrees
