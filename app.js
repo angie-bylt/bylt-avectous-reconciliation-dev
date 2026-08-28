@@ -1225,6 +1225,11 @@ const ORDER_STATUS = {
     nsShippedField:['Fulfillment Status'],
     nsShipDateField:['Date Fulfilled']
   },
+  // Go-live at the 810 Texas DC. Anything dated earlier is a stray record
+  // rather than part of the period being reported on, and a day with two
+  // orders on it distorts every percentage it appears in.
+  startDate:'2026-08-06',
+
   shipments:{
     label:'Avectous Shipment Details',
     url:'https://bylt.avectous.com/portal/frameworkpage/62c9bee6-310c-46bf-4c3b-08deafb23cf9/7cb9984b-6345-45c5-b795-9aa14a6548ad/ddc9cab9-825a-467e-9323-5816ef1c577e',
@@ -1290,7 +1295,14 @@ function computeOrderStatusSide(data, cfg, avShipped, avDays){
   const ledger = [];
   const BLANK = 'Not set';
 
+  let excludedBeforeStart = 0;
   orders.forEach((o, key)=>{
+    // Keep the headline tiles on the same footing as the daily tables. An
+    // order dated before go-live isn't part of the period being reported on,
+    // and counting it in the total while excluding it from every day below
+    // leaves the two disagreeing.
+    if(o.created && o.created < ORDER_STATUS.startDate){ excludedBeforeStart++; return; }
+
     const inAv   = !!(avShipped && o.doc && avShipped.has(o.doc));
     const avDay  = (avDays && o.doc) ? (avDays.get(o.doc) || null) : null;
     const didShip = inAv || o.nsShipped;
@@ -1316,13 +1328,21 @@ function computeOrderStatusSide(data, cfg, avShipped, avDays){
 
   return {
     keyColumn:keyCol, docColumn:docCol, dateColumn:dateCol, channelColumn:chanCol || null,
-    totalRows:data.rows.length, totalOrders:orders.size,
+    totalRows:data.rows.length,
+    ordersInFile: orders.size,
+    excludedBeforeStart,
+    totalOrders: orders.size - excludedBeforeStart,
     shipped, open,
-    pctShipped: orders.size ? (shipped / orders.size) * 100 : 0,
+    pctShipped: (orders.size - excludedBeforeStart) ? (shipped / (orders.size - excludedBeforeStart)) * 100 : 0,
     byCreated, byShipped, byChannel,
     inOut: inOutSeries(byCreated, byShipped),
+    // Prebooks dated after today. Counted in the totals — they are real orders —
+    // but they cannot appear on a daily table that stops at today, so the count
+    // is surfaced instead of leaving the two silently disagreeing.
+    futureDated: Object.keys(byCreated).filter(d => d > isoToday())
+                   .reduce((n,d)=> n + byCreated[d].total, 0),
     ledger,
-    reconciles: (shipped + open) === orders.size
+    reconciles: (shipped + open) === (orders.size - excludedBeforeStart)
   };
 }
 
@@ -1333,7 +1353,8 @@ function computeOrderStatusSide(data, cfg, avShipped, avDays){
 function inOutSeries(byCreated, byShipped){
   const all = new Set([...Object.keys(byCreated), ...Object.keys(byShipped)]);
   const today = isoToday();
-  const days = [...all].filter(d => d && d <= today).sort();
+  const from = ORDER_STATUS.startDate;
+  const days = [...all].filter(d => d && d >= from && d <= today).sort();
   if(!days.length) return [];
   const DOW = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
   return days.map(d=>{
@@ -1354,7 +1375,8 @@ function inOutSeries(byCreated, byShipped){
 function createdSeries(byCreated){
   const today = isoToday();
   const DOW = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-  return Object.keys(byCreated).filter(d => d && d <= today).sort().map(d=>{
+  const from = ORDER_STATUS.startDate;
+  return Object.keys(byCreated).filter(d => d && d >= from && d <= today).sort().map(d=>{
     const v = byCreated[d];
     return { day:d, dow: DOW[new Date(d + 'T12:00:00').getDay()],
              total:v.total, shipped:v.shipped, open:v.total - v.shipped,
@@ -1377,6 +1399,7 @@ function computeOrderStatus(soData, toData, shipData){
   return {
     so, to,
     total:{ totalOrders, shipped, open: sum('open'),
+            excludedBeforeStart: sum('excludedBeforeStart'),
             pctShipped: totalOrders ? (shipped / totalOrders) * 100 : 0 },
     shipmentsFile: av ? (av.error ? { error:av.error } : { orders:av.set.size, dateColumn:av.dateColumn }) : null,
     computedAt: isoToday()

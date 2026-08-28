@@ -451,3 +451,7 @@ header.topbar nav a{ margin-left:16px; }
 .mo-note.bad{ background:var(--red-bg); border:1px solid #f3c6c6; color:#8a1f1f; }
 .os-group{ font-size:17px; color:var(--navy); margin:26px 0 12px; padding-bottom:7px; border-bottom:2px solid var(--border); }
 .os-group:first-of-type{ margin-top:6px; }
+.bl-row.bl-row-total{ border-top:2px solid #c3cad3; padding-top:7px; margin-top:4px; }
+.bl-row-total .d{ font-weight:700; color:var(--text); }
+.bl-row-total .n b{ font-weight:800; }
+.os-split-line{ margin-top:11px; padding-top:10px; border-top:1px solid var(--border); font-size:13px; color:var(--text); }

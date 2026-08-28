@@ -22,14 +22,25 @@ has no record at all.
 ### Two tables, two questions
 
 **Orders in vs out** — how many arrived that day against how many left the
-building. Throughput. Days the DC was closed are greyed and labelled rather than
+building. Throughput. Every day since go-live is shown, not a trailing window:
+the closed weekends in the first fortnight are the reason the backlog exists, and
+cutting them off invites the question "what happened before this". Days the DC was closed are greyed and labelled rather than
 dropped: two closed weekends took 5,747 orders and shipped none, which is where
 the backlog came from. The closed flag needs 200+ orders in and zero out, so a
 quiet transfer-order day isn't mislabelled.
 
 **By the day the order came in** — of Monday's orders, how many are done by now.
-Progress. These two can disagree, which is useful: a slow shipping day can belong
+Progress. Ends with an All days row that ties to the in-vs-out footer. These two can disagree, which is useful: a slow shipping day can belong
 to a creation day that later cleared completely.
+
+Everything starts at go-live, 6 Aug 2026 — set as `ORDER_STATUS.startDate`. The
+headline tiles and the channel tables use the same cut as the daily tables, so
+the three always agree. Orders dated before go-live are excluded and their count
+shown under the heading; prebooks dated after today are counted in the totals but
+noted under the daily table, since a table that stops at today can't show them. A handful of
+orders carry earlier transaction dates and a day with two orders on it distorts
+every percentage it appears in. The headline totals still count every order; only
+the daily breakdowns are cut.
 
 Both carry weekday names, which makes the weekend pattern self-explanatory —
 weekdays average about 1,600 shipped, Saturdays 244, Sundays 57.

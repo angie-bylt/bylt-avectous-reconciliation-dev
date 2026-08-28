@@ -233,13 +233,25 @@ const fmt = n => (n === null || n === undefined) ? '\u2014' : Number(n).toLocale
 const shortDay = iso => { const d = new Date(iso + 'T12:00:00'); return isNaN(d) ? iso : `${d.getMonth()+1}/${d.getDate()}`; };
 const signed = n => (n > 0 ? '+' : '\u2212') + fmt(Math.abs(n));
 
-function heroBlock(t){
+function heroBlock(t, res){
+  // The combined tile hides a wide gap between the two order types, so the
+  // split sits directly beneath it rather than only in the tables further down.
+  const parts = [['so','sales order'],['to','transfer order']].map(function(p){
+    const r = res[p[0]];
+    if(!r || r.error) return null;
+    return `${fmt(r.totalOrders)} ${p[1]}${r.totalOrders === 1 ? '' : 's'} <span style="color:var(--muted);">(${r.pctShipped.toFixed(1)}% shipped)</span>`;
+  }).filter(Boolean);
+  const splitLine = parts.length ? `<div class="os-split-line">${parts.join(' &nbsp;&middot;&nbsp; ')}</div>` : '';
+  return heroBody(t, splitLine);
+}
+
+function heroBody(t, splitLine){
   return `
     <div class="os-hero">
       <div class="os-hero-head">
         <div>
           <h2>All orders &mdash; 810 Texas DC</h2>
-          <p class="os-sub">Created in NetSuite &middot; shipments from Avectous</p>
+          <p class="os-sub">Created in NetSuite &middot; shipments from Avectous &middot; from go-live 8/6${t.excludedBeforeStart ? ` &middot; ${fmt(t.excludedBeforeStart)} earlier order${t.excludedBeforeStart === 1 ? '' : 's'} excluded` : ''}</p>
         </div>
         <div style="text-align:right;">
           <div style="font-size:26px; font-weight:800; color:var(--green); line-height:1;">${t.pctShipped.toFixed(1)}%</div>
@@ -259,6 +271,7 @@ function heroBlock(t){
         <span><i style="background:#1a7f37;"></i>Shipped ${fmt(t.shipped)}</span>
         <span><i style="background:#c22a2a;"></i>Open ${fmt(t.open)}</span>
       </div>
+      ${splitLine}
     </div>`;
 }
 
@@ -283,7 +296,10 @@ function momentumNote(r){
 
 function inOutTable(r, label, showDays){
   if(!r || r.error || !r.inOut || !r.inOut.length) return '';
-  const rows = r.inOut.slice(-(showDays || 14));
+  // A day with nothing in and nothing out says nothing. Transfer orders are
+  // low volume and would otherwise fill the table with empty rows.
+  const active = r.inOut.filter(d => d.created > 0 || d.shippedOut > 0);
+  const rows = showDays ? active.slice(-showDays) : active;
   const tot = r.inOut.reduce((a,d)=>({c:a.c+d.created, s:a.s+d.shippedOut}), {c:0,s:0});
   const body = rows.map(d=>`
     <tr class="${d.closed ? 'io-closed' : ''}">
@@ -301,13 +317,13 @@ function inOutTable(r, label, showDays){
         <thead><tr><th>Day</th><th class="n">Created</th><th class="n">Shipped</th><th class="n">Net</th><th></th></tr></thead>
         <tbody>${body}</tbody>
         <tfoot><tr>
-          <td>Since ${rows.length < r.inOut.length ? shortDay(r.inOut[0].day) : 'the start'}</td>
+          <td>Since ${shortDay(r.inOut[0].day)}</td>
           <td class="n">${fmt(tot.c)}</td><td class="n">${fmt(tot.s)}</td>
           <td class="n" style="color:${tot.s - tot.c >= 0 ? 'var(--green)' : 'var(--red)'};">${signed(tot.s - tot.c)}</td>
           <td></td>
         </tr></tfoot>
       </table>
-      <div class="bl-foot">Showing the last ${rows.length} days of ${r.inOut.length}. A day the DC is closed still takes orders &mdash; that gap is where backlog comes from.</div>
+      <div class="bl-foot">Every day since go-live on 8/6 with any activity, ${rows.length} in total. A day the DC is closed still takes orders &mdash; that gap is where backlog comes from.</div>
     </div>`;
 }
 
@@ -327,14 +343,27 @@ function createdTable(r, label){
       </div>`;
   }).join('');
   const cleared = [...r.created].reverse().find(d => d.total >= 50 && d.pct >= 90);
+  const tot = r.created.reduce((a,d)=>({total:a.total+d.total, shipped:a.shipped+d.shipped, open:a.open+d.open}), {total:0,shipped:0,open:0});
+  const totPct = tot.total ? (tot.shipped / tot.total) * 100 : 0;
+  const totalRow = `
+      <div class="bl-row bl-row-wide bl-row-total">
+        <span class="d">All days</span>
+        <div class="bl-track"><div class="s" style="width:${totPct}%; background:#1a7f37;"></div><div class="o"></div></div>
+        <span class="n">
+          <span class="cnt"><b style="color:var(--green);">${fmt(tot.shipped)}</b> shipped</span>
+          <span class="cnt"><b style="color:var(--red);">${fmt(tot.open)}</b> open</span>
+          <b class="pc">${totPct.toFixed(1)}%</b>
+        </span>
+      </div>`;
   return `
     <div class="os-section">
       <h3>${label} &mdash; shipped and open, by the day the order came in</h3>
-      <div class="os-section-sub">Of the orders created on each day, how many have shipped by now.</div>
-      <div class="bl-rows">${rows}</div>
+      <div class="os-section-sub">Of the orders created on each day, how many have shipped by now. From go-live on 8/6.</div>
+      <div class="bl-rows">${rows}${totalRow}</div>
       <div class="bl-foot">
         ${cleared ? `Orders created up to <strong>${cleared.dow} ${shortDay(cleared.day)}</strong> are 90%+ shipped. ` : ''}
         The most recent days are still working through &mdash; that is normal, not backlog.
+        ${r.futureDated ? `${fmt(r.futureDated)} order${r.futureDated === 1 ? ' is' : 's are'} dated after today (prebooks) and sit outside this table, though they are counted in the totals above.` : ''}
       </div>
     </div>`;
 }
@@ -465,7 +494,7 @@ function render(){
   }
   document.getElementById('exportBtn').style.display = '';
   el.innerHTML = `
-    ${heroBlock(current.total)}
+    ${heroBlock(current.total, current)}
     ${notes(current)}
     ${momentumNote(current.so)}
 
