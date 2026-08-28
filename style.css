@@ -442,3 +442,12 @@ header.topbar nav a{ margin-left:16px; }
   .bl-row.bl-row-wide{ grid-template-columns:52px 1fr; row-gap:2px; }
   .bl-row-wide .n{ grid-column:1 / -1; justify-content:flex-start; padding-left:52px; }
 }
+
+/* Orders in vs out */
+.io-table td.note{ font-size:11px; color:var(--muted); padding-left:12px; }
+.io-table tr.io-closed td{ opacity:0.45; }
+.mo-note{ border-radius:8px; padding:12px 15px; font-size:12.5px; line-height:1.6; margin-bottom:18px; }
+.mo-note.good{ background:#f1f8f3; border:1px solid #cfe8d8; color:#1a5c2e; }
+.mo-note.bad{ background:var(--red-bg); border:1px solid #f3c6c6; color:#8a1f1f; }
+.os-group{ font-size:17px; color:var(--navy); margin:26px 0 12px; padding-bottom:7px; border-bottom:2px solid var(--border); }
+.os-group:first-of-type{ margin-top:6px; }

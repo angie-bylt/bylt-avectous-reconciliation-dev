@@ -49,7 +49,8 @@
         <div class="upload-box">
           <label>1 &middot; Sales Orders &mdash; NetSuite</label>
           <div style="font-size:11.5px; color:var(--muted); margin-bottom:7px;">
-            Search 4866 &middot; <a href="#" id="link-so" target="_blank" rel="noopener" style="color:var(--blue); font-weight:600;">Open &#8599;</a>
+            All orders report &middot;
+            <a href="#" id="link-so" target="_blank" rel="noopener" style="color:var(--blue); font-weight:600;">Open in NetSuite &#8599;</a>
           </div>
           <input type="file" id="file-so" accept=".csv,.xls,.xlsx">
           <div class="upload-status" id="status-so">No file loaded</div>
@@ -57,7 +58,8 @@
         <div class="upload-box">
           <label>2 &middot; Transfer Orders &mdash; NetSuite</label>
           <div style="font-size:11.5px; color:var(--muted); margin-bottom:7px;">
-            Search 4867 &middot; <a href="#" id="link-to" target="_blank" rel="noopener" style="color:var(--blue); font-weight:600;">Open &#8599;</a>
+            Transfer order report &middot;
+            <a href="#" id="link-to" target="_blank" rel="noopener" style="color:var(--blue); font-weight:600;">Open in NetSuite &#8599;</a>
           </div>
           <input type="file" id="file-to" accept=".csv,.xls,.xlsx">
           <div class="upload-status" id="status-to">No file loaded</div>
@@ -65,7 +67,8 @@
         <div class="upload-box">
           <label>3 &middot; Shipment Details &mdash; Avectous</label>
           <div style="font-size:11.5px; color:var(--muted); margin-bottom:7px;">
-            The line-level report with a <code>RecordDate</code> column
+            The line-level report with a <code>RecordDate</code> column &middot;
+            <a href="#" id="link-ship" target="_blank" rel="noopener" style="color:var(--blue); font-weight:600;">Open in Avectous &#8599;</a>
           </div>
           <input type="file" id="file-ship" accept=".csv,.xls,.xlsx">
           <div class="upload-status" id="status-ship">No file loaded</div>
@@ -79,44 +82,38 @@
           the same notes are on the Summary &amp; Method sheet of Export proof, which is the version to share.
         </div>
         <div class="os-method-body open" style="margin-top:0;">
-          <strong>Two questions per order, and only two</strong>
+          <strong>Two facts per order, and only two</strong>
           <ol>
-            <li><strong>Did it ship?</strong> Yes if it appears in the Avectous shipments file, or if NetSuite has a fulfillment. Either one counts.</li>
-            <li><strong>When was it created?</strong> The <code>Date</code> column. Everything about being behind is measured against this.</li>
+            <li><strong>The day it was created</strong> &mdash; NetSuite <code>Date</code>.</li>
+            <li><strong>The day it shipped</strong> &mdash; Avectous <code>RecordDate</code>.</li>
           </ol>
 
-          <strong style="display:block; margin-top:11px;">Why either system counts as shipped</strong>
+          <strong style="display:block; margin-top:11px;">Shipped means Avectous shipped it</strong>
           <div style="margin-top:4px;">
-            Avectous is the source of truth for goods physically leaving. NetSuite's fulfillment is the
-            accounting record and can lag by days. Counting only NetSuite understates what actually shipped.
+            Avectous is the system that physically ships, so it decides. NetSuite is consulted only where
+            Avectous has no record of the order at all &mdash; a small number fulfilled by hand.
           </div>
 
-          <strong style="display:block; margin-top:11px;">Which ship date is used</strong>
-          <div style="margin-top:4px;">
-            Avectous <code>RecordDate</code> where available, otherwise NetSuite's <code>Date Fulfilled</code>.
-            RecordDate is when the warehouse shipped; Date Fulfilled is when NetSuite found out.
-          </div>
-
-          <strong style="display:block; margin-top:11px;">How "days behind" is worked out</strong>
+          <strong style="display:block; margin-top:11px;">The two tables answer different questions</strong>
           <ol>
-            <li>Group orders by the day they were created.</li>
-            <li>Walk back from today to the most recent day that is 90%+ shipped &mdash; that is the last day cleared.</li>
-            <li>The gap from there to today is how far behind the warehouse is.</li>
-            <li>Days with fewer than 50 orders are skipped, so a quiet day can't set the line.</li>
+            <li><strong>Orders in vs out</strong> &mdash; how many arrived that day against how many left the building. Throughput.</li>
+            <li><strong>By the day the order came in</strong> &mdash; of Monday's orders, how many are done by now. Progress.</li>
           </ol>
+          <div style="margin-top:4px;">
+            They can disagree and that is useful. A slow shipping day can belong to a creation day that
+            later cleared completely.
+          </div>
+
+          <strong style="display:block; margin-top:11px;">Closed days are shown, not hidden</strong>
+          <div style="margin-top:4px;">
+            A day with 200+ orders in and none out is marked "DC closed" and greyed. Dropping those rows
+            would hide why the backlog exists &mdash; two closed weekends took 5,747 orders and shipped none.
+          </div>
 
           <strong style="display:block; margin-top:11px;">Counting orders once</strong>
           <div style="margin-top:4px;">
-            Orders are grouped by <code>Internal ID</code>, so an order with several rows counts once.
-            Matching to Avectous uses <code>PO/Check Number</code> for sales orders and
-            <code>Document Number</code> for transfer orders, because those are what Avectous stores.
-          </div>
-
-          <strong style="display:block; margin-top:11px;">What this tab does NOT do</strong>
-          <div style="margin-top:4px;">
-            It does not judge whether an order <em>should</em> have shipped. Holds, cancellations, backorder
-            flags and payment blocks answer "why hasn't this shipped", which is a different question and
-            lives on Integrations Status.
+            Grouped by <code>Internal ID</code>. Matched to Avectous on <code>PO/Check Number</code> for sales
+            orders and <code>Document Number</code> for transfer orders, because those are what Avectous stores.
           </div>
 
           <strong style="display:block; margin-top:11px;">Columns detected on the last run</strong>
@@ -143,9 +140,11 @@ let current = null, savedAt = null, ranBy = null;
 document.getElementById('logoutLink').addEventListener('click', e=>{ e.preventDefault(); logout(); });
 document.getElementById('refreshBtn').addEventListener('click', ()=>init());
 document.getElementById('exportBtn').addEventListener('click', exportProof);
-document.getElementById('link-so').href = ORDER_STATUS.so.url;
-document.getElementById('link-to').href = ORDER_STATUS.to.url;
 document.getElementById('ranBy').value = getLastUsedName();
+[['link-so', ORDER_STATUS.so.url], ['link-to', ORDER_STATUS.to.url], ['link-ship', ORDER_STATUS.shipments.url]].forEach(function(p){
+  var el = document.getElementById(p[0]);
+  if(el && p[1]) el.href = p[1];
+});
 
 document.getElementById('uploadToggle').addEventListener('click', ()=>{
   const open = document.getElementById('uploadBody').classList.toggle('open');
@@ -230,65 +229,112 @@ document.getElementById('runBtn').addEventListener('click', async ()=>{
 
 /* ---------- rendering ---------- */
 
-const fmt = n => (n === null || n === undefined) ? '—' : Number(n).toLocaleString();
-const shortDay = iso => {
-  const d = new Date(iso + 'T00:00:00');
-  return isNaN(d.getTime()) ? iso : `${d.getMonth()+1}/${d.getDate()}`;
-};
+const fmt = n => (n === null || n === undefined) ? '\u2014' : Number(n).toLocaleString();
+const shortDay = iso => { const d = new Date(iso + 'T12:00:00'); return isNaN(d) ? iso : `${d.getMonth()+1}/${d.getDate()}`; };
+const signed = n => (n > 0 ? '+' : '\u2212') + fmt(Math.abs(n));
 
-function sideCard(r, label){
-  if(!r) return `<div class="os-card"><h3>${label}</h3><div class="placeholder">Not loaded yet</div></div>`;
-  if(r.error) return `<div class="os-card"><h3>${label}</h3><div class="os-note err">${escapeHtml(r.error)}</div></div>`;
+function heroBlock(t){
   return `
-    <div class="os-card">
-      <div style="display:flex; justify-content:space-between; align-items:center;">
-        <h3>${label}</h3>
-        <span class="os-card-meta">${fmt(r.totalRows)} rows in file</span>
+    <div class="os-hero">
+      <div class="os-hero-head">
+        <div>
+          <h2>All orders &mdash; 810 Texas DC</h2>
+          <p class="os-sub">Created in NetSuite &middot; shipments from Avectous</p>
+        </div>
+        <div style="text-align:right;">
+          <div style="font-size:26px; font-weight:800; color:var(--green); line-height:1;">${t.pctShipped.toFixed(1)}%</div>
+          <div style="font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:0.3px; font-weight:600;">shipped</div>
+        </div>
       </div>
-      <div class="os-big">${fmt(r.totalOrders)}</div>
-      <div class="os-big-sub">total orders</div>
-      <div class="os-row"><span class="lbl">Shipped</span><span class="num" style="color:var(--green);">${fmt(r.shipped)} <span style="color:var(--muted); font-weight:400;">(${r.pctShipped.toFixed(1)}%)</span></span></div>
-      <div class="os-row"><span class="lbl">Not shipped</span><span class="num" style="color:var(--red);">${fmt(r.notShipped)} <span style="color:var(--muted); font-weight:400;">(${(100 - r.pctShipped).toFixed(1)}%)</span></span></div>
+      <div class="os-tiles" style="grid-template-columns:repeat(3,1fr);">
+        <div class="os-tile accent"><div class="v">${fmt(t.totalOrders)}</div><div class="l">Total orders</div></div>
+        <div class="os-tile good"><div class="v">${fmt(t.shipped)}</div><div class="l">Shipped</div></div>
+        <div class="os-tile bad"><div class="v">${fmt(t.open)}</div><div class="l">Open</div></div>
+      </div>
+      <div class="os-bar">
+        <span style="width:${t.pctShipped}%; background:#1a7f37;"></span>
+        <span style="width:${100 - t.pctShipped}%; background:#c22a2a;"></span>
+      </div>
+      <div class="os-legend">
+        <span><i style="background:#1a7f37;"></i>Shipped ${fmt(t.shipped)}</span>
+        <span><i style="background:#c22a2a;"></i>Open ${fmt(t.open)}</span>
+      </div>
     </div>`;
 }
 
-// How far behind, on order creation date.
-function behindSection(r, label, idx){
-  if(!r || r.error || !r.behind || !r.behind.days.length) return '';
-  const b = r.behind;
-  const rows = b.days.map(d=>{
-    const colour = d.pct >= 90 ? 'var(--green)' : d.pct >= 40 ? '#b8730a' : 'var(--red)';
+// Momentum over the last few working days: is the warehouse gaining or losing?
+function momentumNote(r){
+  if(!r || r.error || !r.inOut || r.inOut.length < 4) return '';
+  const last = r.inOut.slice(-4);
+  const inN = last.reduce((n,d)=>n+d.created,0);
+  const outN = last.reduce((n,d)=>n+d.shippedOut,0);
+  const net = outN - inN;
+  const closed = r.inOut.filter(d=>d.closed);
+  const closedOrders = closed.reduce((n,d)=>n+d.created,0);
+  const closedNote = closed.length
+    ? ` ${closed.length} day${closed.length===1?'':'s'} shipped nothing while ${fmt(closedOrders)} orders arrived.` : '';
+  const cls = net >= 0 ? 'good' : 'bad';
+  const verb = net >= 0 ? 'shipping more than comes in' : 'falling behind intake';
+  return `<div class="mo-note ${cls}">
+    <strong>The warehouse is ${verb}.</strong> Last ${last.length} days: ${fmt(outN)} out against ${fmt(inN)} in, a net
+    ${net >= 0 ? 'gain' : 'loss'} of ${fmt(Math.abs(net))}.${closedNote}
+  </div>`;
+}
+
+function inOutTable(r, label, showDays){
+  if(!r || r.error || !r.inOut || !r.inOut.length) return '';
+  const rows = r.inOut.slice(-(showDays || 14));
+  const tot = r.inOut.reduce((a,d)=>({c:a.c+d.created, s:a.s+d.shippedOut}), {c:0,s:0});
+  const body = rows.map(d=>`
+    <tr class="${d.closed ? 'io-closed' : ''}">
+      <td>${d.dow} ${shortDay(d.day)}</td>
+      <td class="n">${fmt(d.created)}</td>
+      <td class="n">${fmt(d.shippedOut)}</td>
+      <td class="n" style="color:${d.net >= 0 ? 'var(--green)' : 'var(--red)'}; font-weight:700;">${signed(d.net)}</td>
+      <td class="note">${d.closed ? 'DC closed' : (d.weekend ? '<span style="color:var(--green);">weekend crew</span>' : '')}</td>
+    </tr>`).join('');
+  return `
+    <div class="os-section">
+      <h3>${label} &mdash; orders in vs orders out</h3>
+      <div class="os-section-sub">How many arrived that day, and how many left the building that day.</div>
+      <table class="os-chan-table io-table">
+        <thead><tr><th>Day</th><th class="n">Created</th><th class="n">Shipped</th><th class="n">Net</th><th></th></tr></thead>
+        <tbody>${body}</tbody>
+        <tfoot><tr>
+          <td>Since ${rows.length < r.inOut.length ? shortDay(r.inOut[0].day) : 'the start'}</td>
+          <td class="n">${fmt(tot.c)}</td><td class="n">${fmt(tot.s)}</td>
+          <td class="n" style="color:${tot.s - tot.c >= 0 ? 'var(--green)' : 'var(--red)'};">${signed(tot.s - tot.c)}</td>
+          <td></td>
+        </tr></tfoot>
+      </table>
+      <div class="bl-foot">Showing the last ${rows.length} days of ${r.inOut.length}. A day the DC is closed still takes orders &mdash; that gap is where backlog comes from.</div>
+    </div>`;
+}
+
+function createdTable(r, label){
+  if(!r || r.error || !r.created || !r.created.length) return '';
+  const rows = r.created.map(d=>{
+    const colour = d.pct >= 90 ? '#1a7f37' : d.pct >= 40 ? '#d9a520' : '#c0392b';
     return `
       <div class="bl-row bl-row-wide">
-        <span class="d">${shortDay(d.day)}</span>
+        <span class="d">${d.dow} ${shortDay(d.day)}</span>
         <div class="bl-track"><div class="s" style="width:${d.pct}%; background:${colour};"></div><div class="o"></div></div>
         <span class="n">
           <span class="cnt"><b style="color:var(--green);">${fmt(d.shipped)}</b> shipped</span>
-          <span class="cnt"><b style="color:var(--red);">${fmt(d.notShipped)}</b> open</span>
+          <span class="cnt"><b style="color:var(--red);">${fmt(d.open)}</b> open</span>
           <b class="pc" style="color:${colour};">${d.pct.toFixed(1)}%</b>
         </span>
       </div>`;
   }).join('');
-
-  const id = 'bl' + idx;
+  const cleared = [...r.created].reverse().find(d => d.total >= 50 && d.pct >= 90);
   return `
     <div class="os-section">
-      <h3>${label} &mdash; how far behind is the warehouse?</h3>
-      <div class="os-section-sub">Orders grouped by the day they were created, and how many of each day have shipped.</div>
-      ${b.caughtUpThrough ? `
-      <p class="bl-lead">
-        Orders created up to <strong style="color:var(--green);">${shortDay(b.caughtUpThrough)}</strong> are
-        90%+ shipped. Newer than that, they aren't.
-      </p>
-      <p class="bl-lead">
-        That puts the warehouse <strong style="color:var(--red);">${b.daysBehind} ${b.daysBehind === 1 ? 'day' : 'days'} behind</strong>,
-        with <strong style="color:#b8730a;">${fmt(b.openAfter)} orders</strong> waiting from those newer days.
-      </p>` : `
-      <p class="bl-lead">No day yet reaches 90% shipped. <strong>${fmt(b.totalOpen)} orders</strong> are waiting.</p>`}
-      <div class="bl-rows" id="${id}">${rows}</div>
+      <h3>${label} &mdash; shipped and open, by the day the order came in</h3>
+      <div class="os-section-sub">Of the orders created on each day, how many have shipped by now.</div>
+      <div class="bl-rows">${rows}</div>
       <div class="bl-foot">
-        ${fmt(b.totalOpen)} orders are unshipped in total, across every creation day shown.
-        An order counts as shipped if either Avectous or NetSuite says so.
+        ${cleared ? `Orders created up to <strong>${cleared.dow} ${shortDay(cleared.day)}</strong> are 90%+ shipped. ` : ''}
+        The most recent days are still working through &mdash; that is normal, not backlog.
       </div>
     </div>`;
 }
@@ -297,13 +343,13 @@ function channelTable(r, label){
   if(!r || r.error || !r.byChannel) return '';
   const rows = Object.entries(r.byChannel).sort((a,b)=> b[1].total - a[1].total);
   if(!rows.length) return '';
-  const tot = rows.reduce((a,[,v])=>({total:a.total+v.total, shipped:a.shipped+v.shipped, notShipped:a.notShipped+v.notShipped}), {total:0,shipped:0,notShipped:0});
+  const tot = rows.reduce((a,[,v])=>({total:a.total+v.total, shipped:a.shipped+v.shipped, open:a.open+v.open}), {total:0,shipped:0,open:0});
   const body = rows.map(([name,v])=>{
     const pct = v.total ? (v.shipped/v.total)*100 : 0;
     return `<tr>
       <td class="os-chan-name">${escapeHtml(name === '- None -' ? 'Not set' : name)}</td>
       <td class="n" style="color:var(--green); font-weight:700;">${fmt(v.shipped)}</td>
-      <td class="n" style="color:var(--red); font-weight:700;">${fmt(v.notShipped)}</td>
+      <td class="n" style="color:var(--red); font-weight:700;">${fmt(v.open)}</td>
       <td class="n" style="color:var(--muted);">${fmt(v.total)}</td>
       <td class="n" style="font-weight:700;">${pct.toFixed(1)}%</td>
     </tr>`;
@@ -313,63 +359,29 @@ function channelTable(r, label){
       <h3>${label} by channel</h3>
       <div class="os-section-sub">Channel read from the <strong>${escapeHtml(r.channelColumn || 'n/a')}</strong> column</div>
       <table class="os-chan-table">
-        <thead><tr><th>Channel</th><th class="n">Shipped</th><th class="n">Not shipped</th><th class="n">Total</th><th class="n">% shipped</th></tr></thead>
+        <thead><tr><th>Channel</th><th class="n">Shipped</th><th class="n">Open</th><th class="n">Total</th><th class="n">% shipped</th></tr></thead>
         <tbody>${body}</tbody>
         <tfoot><tr>
-          <td>All channels</td><td class="n">${fmt(tot.shipped)}</td><td class="n">${fmt(tot.notShipped)}</td>
-          <td class="n">${fmt(tot.total)}</td>
-          <td class="n">${tot.total ? ((tot.shipped/tot.total)*100).toFixed(1) : 0}%</td>
+          <td>All channels</td><td class="n">${fmt(tot.shipped)}</td><td class="n">${fmt(tot.open)}</td>
+          <td class="n">${fmt(tot.total)}</td><td class="n">${tot.total ? ((tot.shipped/tot.total)*100).toFixed(1) : 0}%</td>
         </tr></tfoot>
       </table>
     </div>`;
 }
 
-function shippedPerDay(map, label){
-  const entries = Object.entries(map || {}).sort();
-  if(!entries.length) return '';
-  const slice = entries.slice(-21);
-  const max = Math.max(...slice.map(([,v])=>v), 1);
-  const cols = slice.map(([day,v])=>`
-    <div class="os-chart-col" title="${day}: ${fmt(v)}">
-      <div class="bar-val">${v > 0 ? fmt(v) : ''}</div>
-      <div class="seg only" style="height:${Math.max((v/max)*100, v>0?2:0)}%;"></div>
-    </div>`).join('');
-  const axis = slice.map(([day])=>`<div>${shortDay(day)}</div>`).join('');
-  const total = slice.reduce((a,[,v])=>a+v,0);
-  const busiest = slice.reduce((a,b)=> b[1]>a[1]?b:a);
-  return `
-    <div class="os-section">
-      <h3>${label} shipped per day</h3>
-      <div class="os-section-sub">Counted on the day Avectous shipped the order.</div>
-      <div class="os-chart"><div class="os-chart-cols">${cols}</div><div class="os-chart-axis">${axis}</div></div>
-      <div style="margin-top:12px; font-size:12.5px; color:var(--muted);">
-        ${fmt(total)} orders across these ${slice.length} days &middot; busiest was ${shortDay(busiest[0])} at ${fmt(busiest[1])}
-      </div>
-    </div>`;
-}
-
 function notes(res){
   const out = [];
-  if(!res.shipmentsFile){
-    out.push(`<div class="os-note warn">Avectous shipment file not loaded, so an order only counts as shipped once NetSuite has a fulfillment. That understates the real figure and makes the daily chart read as though the warehouse stopped.</div>`);
-  } else if(res.shipmentsFile.error){
-    out.push(`<div class="os-note err">${escapeHtml(res.shipmentsFile.error)}</div>`);
-  }
+  if(!res.shipmentsFile) out.push(`<div class="os-note warn">Avectous shipment file not loaded. Shipped counts are coming from NetSuite alone, which understates them.</div>`);
+  else if(res.shipmentsFile.error) out.push(`<div class="os-note err">${escapeHtml(res.shipmentsFile.error)}</div>`);
   ['so','to'].forEach(k=>{
     const r = res[k];
-    if(r && !r.error && !r.reconciles){
-      out.push(`<div class="os-note err">${k === 'so' ? 'Sales' : 'Transfer'} orders: shipped plus not shipped doesn't equal the order count. Don't trust these numbers.</div>`);
-    }
+    if(r && r.error) out.push(`<div class="os-note err">${escapeHtml(r.error)}</div>`);
+    else if(r && !r.reconciles) out.push(`<div class="os-note err">${k === 'so' ? 'Sales' : 'Transfer'} orders: shipped plus open doesn't equal the total. Don't trust these numbers.</div>`);
   });
   return out.join('');
 }
 
-const LEDGER_HEADERS = ['Internal ID','Order Number','Created','State','Date Shipped','Channel','NetSuite fulfilled','In Avectous shipments'];
-
-function ledgerSheet(side){
-  if(!side || side.error || !side.ledger || !side.ledger.length) return null;
-  return XLSX.utils.aoa_to_sheet([LEDGER_HEADERS, ...side.ledger]);
-}
+const LEDGER_HEADERS = ['Internal ID','Order Number','Created','State','Date Shipped','Channel','In Avectous','NetSuite fulfilled'];
 
 // Every headline number, the rule behind it, and one row per order.
 function exportProof(){
@@ -381,53 +393,61 @@ function exportProof(){
     const wb = XLSX.utils.book_new();
     const t = current.total;
     const S = [];
-    const push = (...r) => S.push(r.map(x => x === undefined ? '' : x));
+    const push = function(){ S.push(Array.prototype.slice.call(arguments).map(function(x){ return x === undefined ? '' : x; })); };
 
     push('ORDER STATUS \u2014 810 TEXAS DC');
     push('Figures as at', savedAt ? new Date(savedAt).toLocaleString() : new Date().toLocaleString());
     push('Prepared by', ranBy || '');
     push();
     push('', 'Orders', '%', 'Rule');
-    push('Total orders', t.totalOrders, '', 'Every sales and transfer order at the 810 Texas DC created 8/6 onward. Counted once, by Internal ID.');
-    push('Shipped', t.shipped, t.pctShipped.toFixed(1) + '%', 'Appears in the Avectous shipment file, OR has a fulfillment in NetSuite. Either counts.');
-    push('Not shipped', t.notShipped, (100 - t.pctShipped).toFixed(1) + '%', 'Neither system says it shipped.');
+    push('Total orders', t.totalOrders, '', 'Every order in the two NetSuite reports, counted once by Internal ID.');
+    push('Shipped', t.shipped, t.pctShipped.toFixed(1) + '%', 'Avectous has a shipment for it. NetSuite is used only where Avectous has no record at all.');
+    push('Open', t.open, (100 - t.pctShipped).toFixed(1) + '%', 'Neither system says it shipped.');
     push();
-    [['so','Sales orders'],['to','Transfer orders']].forEach(function(pair){
-      const k = pair[0], label = pair[1], r = current[k];
+
+    [['so','SALES ORDERS'],['to','TRANSFER ORDERS']].forEach(function(pair){
+      var r = current[pair[0]];
       if(!r || r.error) return;
-      push(label.toUpperCase());
+      push(pair[1]);
       push('Total orders', r.totalOrders);
       push('Shipped', r.shipped, r.pctShipped.toFixed(1) + '%');
-      push('Not shipped', r.notShipped);
-      if(r.behind && r.behind.caughtUpThrough){
-        push('Caught up through', r.behind.caughtUpThrough, '', 'Most recent creation day that is 90%+ shipped.');
-        push('Days behind', r.behind.daysBehind, '', 'Gap between that day and today.');
-        push('Waiting from newer days', r.behind.openAfter);
-      }
+      push('Open', r.open);
       push();
-      push('by channel', 'Shipped', 'Not shipped', 'Total');
+      push('Orders in vs out', 'Created', 'Shipped', 'Net', 'Note');
+      r.inOut.forEach(function(d){
+        push('  ' + d.dow + ' ' + d.day, d.created, d.shippedOut, d.net, d.closed ? 'DC closed' : (d.weekend ? 'weekend' : ''));
+      });
+      push();
+      push('By day created', 'Total', 'Shipped', 'Open', '% shipped');
+      r.created.forEach(function(d){
+        push('  ' + d.dow + ' ' + d.day, d.total, d.shipped, d.open, d.pct.toFixed(1) + '%');
+      });
+      push();
+      push('By channel', 'Shipped', 'Open', 'Total');
       Object.entries(r.byChannel).sort(function(a,b){ return b[1].total - a[1].total; })
-        .forEach(function(e){ push('  ' + (e[0] === '- None -' ? 'Not set' : e[0]), e[1].shipped, e[1].notShipped, e[1].total); });
+        .forEach(function(e){ push('  ' + (e[0] === '- None -' ? 'Not set' : e[0]), e[1].shipped, e[1].open, e[1].total); });
       push();
     });
-    push('HOW TO CHECK THIS');
-    push('1', 'Open a ledger tab. One row per order, Internal ID never repeats.');
-    push('2', 'Filter State to Shipped and count the rows \u2014 it equals the Shipped figure.');
-    push('3', 'The last two columns show which system said it shipped. Either one is enough.');
 
-    const sum = XLSX.utils.aoa_to_sheet(S);
-    sum['!cols'] = [{wch:30},{wch:12},{wch:8},{wch:95}];
+    push('HOW TO CHECK THIS');
+    push('1', 'Open a ledger tab. One row per order; Internal ID never repeats.');
+    push('2', 'Filter State to Shipped and count the rows \u2014 it equals the Shipped figure.');
+    push('3', 'The last two columns show which system said it shipped.');
+
+    var sum = XLSX.utils.aoa_to_sheet(S);
+    sum['!cols'] = [{wch:26},{wch:11},{wch:11},{wch:11},{wch:70}];
     XLSX.utils.book_append_sheet(wb, sum, 'Summary & Method');
 
     [['so','Sales Order Ledger'],['to','Transfer Order Ledger']].forEach(function(pair){
-      const sh = ledgerSheet(current[pair[0]]);
-      if(!sh) return;
-      sh['!cols'] = [{wch:13},{wch:20},{wch:12},{wch:13},{wch:13},{wch:18},{wch:17},{wch:20}];
-      sh['!autofilter'] = { ref: XLSX.utils.encode_range({ s:{r:0,c:0}, e:{r:current[pair[0]].ledger.length, c:LEDGER_HEADERS.length-1} }) };
+      var r = current[pair[0]];
+      if(!r || r.error || !r.ledger || !r.ledger.length) return;
+      var sh = XLSX.utils.aoa_to_sheet([LEDGER_HEADERS].concat(r.ledger));
+      sh['!cols'] = [{wch:13},{wch:20},{wch:12},{wch:10},{wch:13},{wch:20},{wch:12},{wch:18}];
+      sh['!autofilter'] = { ref: XLSX.utils.encode_range({ s:{r:0,c:0}, e:{r:r.ledger.length, c:LEDGER_HEADERS.length-1} }) };
       XLSX.utils.book_append_sheet(wb, sh, pair[1]);
     });
 
-    const d = new Date(); const pad = n => String(n).padStart(2,'0');
+    var d = new Date(); var pad = function(n){ return String(n).padStart(2,'0'); };
     XLSX.writeFile(wb, 'BYLT_Order_Status_810TX_' + d.getFullYear() + pad(d.getMonth()+1) + pad(d.getDate()) + '.xlsx');
   } catch(err){
     alert('Could not build the export: ' + err.message);
@@ -444,50 +464,20 @@ function render(){
     return;
   }
   document.getElementById('exportBtn').style.display = '';
-  const t = current.total;
-
   el.innerHTML = `
-    <div class="os-hero">
-      <div class="os-hero-head">
-        <div>
-          <h2>All orders &mdash; 810 Texas DC</h2>
-          <p class="os-sub">Sales orders 4866 &middot; transfer orders 4867 &middot; created 8/6 onward</p>
-        </div>
-        <div style="text-align:right;">
-          <div style="font-size:26px; font-weight:800; color:var(--green); line-height:1;">${t.pctShipped.toFixed(1)}%</div>
-          <div style="font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:0.3px; font-weight:600;">shipped</div>
-        </div>
-      </div>
-      <div class="os-tiles" style="grid-template-columns:repeat(3,1fr);">
-        <div class="os-tile accent"><div class="v">${fmt(t.totalOrders)}</div><div class="l">Total orders</div></div>
-        <div class="os-tile good"><div class="v">${fmt(t.shipped)}</div><div class="l">Shipped</div></div>
-        <div class="os-tile bad"><div class="v">${fmt(t.notShipped)}</div><div class="l">Not shipped</div></div>
-      </div>
-      <div class="os-bar">
-        <span style="width:${t.pctShipped}%; background:#1a7f37;"></span>
-        <span style="width:${100 - t.pctShipped}%; background:#c22a2a;"></span>
-      </div>
-      <div class="os-legend">
-        <span><i style="background:#1a7f37;"></i>Shipped ${fmt(t.shipped)} (${t.pctShipped.toFixed(1)}%)</span>
-        <span><i style="background:#c22a2a;"></i>Not shipped ${fmt(t.notShipped)} (${(100 - t.pctShipped).toFixed(1)}%)</span>
-      </div>
-    </div>
-
-    <div class="os-split">
-      ${sideCard(current.so, 'Sales orders')}
-      ${sideCard(current.to, 'Transfer orders')}
-    </div>
-
+    ${heroBlock(current.total)}
     ${notes(current)}
+    ${momentumNote(current.so)}
 
-    ${behindSection(current.so, 'Sales orders', 1)}
-    ${behindSection(current.to, 'Transfer orders', 2)}
-
+    <h2 class="os-group">Sales orders</h2>
+    ${inOutTable(current.so, 'Sales orders')}
+    ${createdTable(current.so, 'Sales orders')}
     ${channelTable(current.so, 'Sales orders')}
-    ${channelTable(current.to, 'Transfer orders')}
 
-    ${shippedPerDay(current.so && current.so.byShipDay, 'Sales orders')}
-    ${shippedPerDay(current.to && current.to.byShipDay, 'Transfer orders')}
+    <h2 class="os-group">Transfer orders</h2>
+    ${inOutTable(current.to, 'Transfer orders')}
+    ${createdTable(current.to, 'Transfer orders')}
+    ${channelTable(current.to, 'Transfer orders')}
   `;
 }
 

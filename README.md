@@ -11,51 +11,37 @@ Pages, one password gate:
 
 ## Order Status tab
 
-Three uploads: NetSuite sales orders (4866), NetSuite transfer orders (4867),
+Three uploads: the NetSuite all-orders report, a NetSuite transfer order report,
 and Avectous Shipment Details.
 
-**Two questions per order, and only two.** Did it ship, and when was it created.
+**Two facts per order.** The day it was created (NetSuite `Date`) and the day it
+shipped (Avectous `RecordDate`). Avectous decides whether an order shipped
+because it is the system that ships; NetSuite is consulted only where Avectous
+has no record at all.
 
-An order counts as **shipped** if it appears in the Avectous shipment file OR has
-a fulfillment in NetSuite. Either one is enough. Avectous is the source of truth
-for goods leaving the building; NetSuite's fulfillment is the accounting record
-and can lag by days, so counting only NetSuite understates reality.
+### Two tables, two questions
 
-Ship date is Avectous `RecordDate` where available, falling back to NetSuite
-`Date Fulfilled`. RecordDate is when the warehouse shipped; Date Fulfilled is
-when NetSuite found out.
+**Orders in vs out** — how many arrived that day against how many left the
+building. Throughput. Days the DC was closed are greyed and labelled rather than
+dropped: two closed weekends took 5,747 orders and shipped none, which is where
+the backlog came from. The closed flag needs 200+ orders in and zero out, so a
+quiet transfer-order day isn't mislabelled.
 
-**What this tab deliberately does not do** is judge whether an order *should*
-have shipped. Holds, cancellation states, backorder flags and payment blocks
-answer "why hasn't this shipped" — a different question, and one that belongs on
-Integrations Status. An earlier version bucketed orders into ready/held/cancelled
-and it made the five numbers people actually asked for harder to find.
+**By the day the order came in** — of Monday's orders, how many are done by now.
+Progress. These two can disagree, which is useful: a slow shipping day can belong
+to a creation day that later cleared completely.
 
-### The five metrics
+Both carry weekday names, which makes the weekend pattern self-explanatory —
+weekdays average about 1,600 shipped, Saturdays 244, Sundays 57.
 
-1. **Total, shipped, not shipped** with percentages, combined and per order type.
-2. **How far behind** — orders grouped by creation date, each row showing the
-   shipped count, the open count and the percentage. Both counts matter: 54.5%
-   of 1,367 orders is a different problem from 54.5% of 12. The most recent day
-   at 90%+ shipped is the last day cleared; the gap from there to today is the
-   lag. Days under 50 orders are skipped so a quiet day can't set the line, and
-   90% rather than 100% because a few stragglers always linger.
-3. **By channel** — sales orders read `Order Source`, transfer orders read
-   `Channel`. The All channels row always matches the card above.
-4. **Shipped per day** — counted on the day Avectous shipped.
+### By channel
 
-Baseline from the 27 Aug files: 32,167 orders, 24,232 shipped (75.3%). Sales
-orders 78.8% shipped and 4 days behind; transfer orders 20.5% shipped and 17 days
-behind.
+Sales orders read `Order Source` (Shopify, Shopify B2B, EDI, Manual, Replacement
+Order). Transfer orders read `Channel`. Swap to `Sales Channel` for the
+100 ECOMM / 200 RETAIL / 800 WHOLESALE cut — the column list already accepts it.
 
-### Counting rules
-
-Orders are grouped by `Internal ID`, so an order with several rows counts once.
-Matching to Avectous uses `PO/Check Number` for sales orders and
-`Document Number` for transfer orders, because those are what Avectous stores.
-
-All three files must be pulled at the same time. Pull NetSuite at 9am and
-Avectous at 11am and anything shipped in between looks unshipped.
+Baseline from the 28 Aug files: 36,161 orders, 28,128 shipped. Sales orders
+80.6% shipped, transfer orders 28.3%.
 
 ## Integrations Status tab
 
