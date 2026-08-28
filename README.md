@@ -36,8 +36,9 @@ to a creation day that later cleared completely.
 Everything starts at go-live, 6 Aug 2026 — set as `ORDER_STATUS.startDate`. The
 headline tiles and the channel tables use the same cut as the daily tables, so
 the three always agree. Orders dated before go-live are excluded and their count
-shown under the heading; prebooks dated after today are counted in the totals but
-noted under the daily table, since a table that stops at today can't show them. A handful of
+shown under the heading. Prebooks dated after today are counted in the totals but
+don't appear in the daily table, which stops at today — 18 orders on the 28 Aug
+data, so the card total and the daily rows differ by that much. A handful of
 orders carry earlier transaction dates and a day with two orders on it distorts
 every percentage it appears in. The headline totals still count every order; only
 the daily breakdowns are cut.

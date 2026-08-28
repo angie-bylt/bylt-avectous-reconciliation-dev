@@ -275,25 +275,6 @@ function heroBody(t, splitLine){
     </div>`;
 }
 
-// Momentum over the last few working days: is the warehouse gaining or losing?
-function momentumNote(r){
-  if(!r || r.error || !r.inOut || r.inOut.length < 4) return '';
-  const last = r.inOut.slice(-4);
-  const inN = last.reduce((n,d)=>n+d.created,0);
-  const outN = last.reduce((n,d)=>n+d.shippedOut,0);
-  const net = outN - inN;
-  const closed = r.inOut.filter(d=>d.closed);
-  const closedOrders = closed.reduce((n,d)=>n+d.created,0);
-  const closedNote = closed.length
-    ? ` ${closed.length} day${closed.length===1?'':'s'} shipped nothing while ${fmt(closedOrders)} orders arrived.` : '';
-  const cls = net >= 0 ? 'good' : 'bad';
-  const verb = net >= 0 ? 'shipping more than comes in' : 'falling behind intake';
-  return `<div class="mo-note ${cls}">
-    <strong>The warehouse is ${verb}.</strong> Last ${last.length} days: ${fmt(outN)} out against ${fmt(inN)} in, a net
-    ${net >= 0 ? 'gain' : 'loss'} of ${fmt(Math.abs(net))}.${closedNote}
-  </div>`;
-}
-
 function inOutTable(r, label, showDays){
   if(!r || r.error || !r.inOut || !r.inOut.length) return '';
   // A day with nothing in and nothing out says nothing. Transfer orders are
@@ -342,7 +323,6 @@ function createdTable(r, label){
         </span>
       </div>`;
   }).join('');
-  const cleared = [...r.created].reverse().find(d => d.total >= 50 && d.pct >= 90);
   const tot = r.created.reduce((a,d)=>({total:a.total+d.total, shipped:a.shipped+d.shipped, open:a.open+d.open}), {total:0,shipped:0,open:0});
   const totPct = tot.total ? (tot.shipped / tot.total) * 100 : 0;
   const totalRow = `
@@ -360,11 +340,7 @@ function createdTable(r, label){
       <h3>${label} &mdash; shipped and open, by the day the order came in</h3>
       <div class="os-section-sub">Of the orders created on each day, how many have shipped by now. From go-live on 8/6.</div>
       <div class="bl-rows">${rows}${totalRow}</div>
-      <div class="bl-foot">
-        ${cleared ? `Orders created up to <strong>${cleared.dow} ${shortDay(cleared.day)}</strong> are 90%+ shipped. ` : ''}
-        The most recent days are still working through &mdash; that is normal, not backlog.
-        ${r.futureDated ? `${fmt(r.futureDated)} order${r.futureDated === 1 ? ' is' : 's are'} dated after today (prebooks) and sit outside this table, though they are counted in the totals above.` : ''}
-      </div>
+
     </div>`;
 }
 
@@ -496,7 +472,6 @@ function render(){
   el.innerHTML = `
     ${heroBlock(current.total, current)}
     ${notes(current)}
-    ${momentumNote(current.so)}
 
     <h2 class="os-group">Sales orders</h2>
     ${inOutTable(current.so, 'Sales orders')}
