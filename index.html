@@ -510,7 +510,8 @@ async function init(){
         const r = current[k];
         if(!r || r.error) return '<div class="mrow"><span class="k">' + label + '</span><span class="v">not loaded</span></div>';
         const detail = 'key ' + escapeHtml(r.keyColumn) +
-          ' \u00b7 status ' + escapeHtml(r.statusColumn) +
+          ' \u00b7 order no. ' + escapeHtml(r.docColumn || 'n/a') +
+          ' \u00b7 created ' + escapeHtml(r.dateColumn || 'n/a') +
           ' \u00b7 channel ' + escapeHtml(r.channelColumn || 'n/a');
         return '<div class="mrow"><span class="k">' + label + '</span><span class="v">' + detail + '</span></div>';
       }).join('');

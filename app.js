@@ -1163,11 +1163,35 @@ function isCancelled(wmsValue, statusValue){
 // than leaving them blank.
 function isoDay(raw){
   if(raw === null || raw === undefined) return null;
+
+  // A date-only spreadsheet cell arrives from SheetJS as midnight UTC. Reading
+  // it with local getters shifts it a day earlier anywhere west of Greenwich,
+  // which silently mislabels every row of the daily breakdown. So when the
+  // value is already a Date sitting exactly on a UTC midnight, read it in UTC.
+  const pad = n => String(n).padStart(2, '0');
+  if(raw instanceof Date && !isNaN(raw.getTime())){
+    if(raw.getUTCHours() === 0 && raw.getUTCMinutes() === 0 &&
+       raw.getUTCSeconds() === 0 && raw.getUTCMilliseconds() === 0){
+      return `${raw.getUTCFullYear()}-${pad(raw.getUTCMonth()+1)}-${pad(raw.getUTCDate())}`;
+    }
+    return `${raw.getFullYear()}-${pad(raw.getMonth()+1)}-${pad(raw.getDate())}`;
+  }
+
   const str = String(raw).trim();
   if(!str || norm(str) === 'none' || str === '- None -') return null;
+
+  // A plain date string is a calendar date with no timezone. Build it directly
+  // rather than letting Date.parse decide, which treats YYYY-MM-DD as UTC.
+  const m = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if(m) return `${m[1]}-${m[2]}-${m[3]}`;
+  const us = str.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{2,4})/);
+  if(us){
+    let y = us[3].length === 2 ? '20' + us[3] : us[3];
+    return `${y}-${pad(us[1])}-${pad(us[2])}`;
+  }
+
   const d = parseDateRobust(raw);
   if(!d || isNaN(d.getTime()) || d.getFullYear() < 2000) return null;
-  const pad = n => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
 }
 

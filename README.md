@@ -286,3 +286,21 @@ Two guards now:
 Each sheet is also built inside its own try/catch. A sheet that fails now leaves
 a placeholder and a "Build Problems" sheet listing what went wrong, rather than
 silently costing you every sheet after it.
+
+
+## The timezone bug
+
+A date-only spreadsheet cell arrives from SheetJS as midnight **UTC**. Reading it
+with local getters (`getDate()`) shifts it a day earlier anywhere west of
+Greenwich — so in Pacific time every row of the daily breakdown was labelled one
+day too early. The counts were right; the labels were wrong.
+
+It did not show up in testing because the test container runs in UTC.
+
+`isoDay` now reads a Date in UTC when it sits exactly on a UTC midnight, which is
+what a date-only cell always does, and parses date strings by pattern rather than
+letting `Date.parse` treat `YYYY-MM-DD` as UTC. Verified identical in UTC,
+Eastern, Pacific and Tokyo.
+
+Anything comparing dates in this codebase should go through `isoDay`. Do not use
+`new Date(...)` plus local getters on a spreadsheet value.
