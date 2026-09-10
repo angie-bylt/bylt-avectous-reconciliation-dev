@@ -1,3 +1,7 @@
+// Build 40 — if the dashboard shows a different build number, the browser is
+// serving a cached copy of this file. Hard-refresh, or bump the ?v= in the HTML.
+const BUILD = '57';
+
 /* ===========================================================
    FULFILLMENT WIDGET — top-of-dashboard rollup, separate from the
    per-area SECTIONS below. Cross-references NetSuite's "fulfillable
@@ -1163,13 +1167,28 @@ function isCancelled(wmsValue, statusValue){
 // than leaving them blank.
 function isoDay(raw){
   if(raw === null || raw === undefined) return null;
-
-  // A date-only spreadsheet cell arrives from SheetJS as midnight UTC. Reading
-  // it with local getters shifts it a day earlier anywhere west of Greenwich,
-  // which silently mislabels every row of the daily breakdown. So when the
-  // value is already a Date sitting exactly on a UTC midnight, read it in UTC.
   const pad = n => String(n).padStart(2, '0');
-  if(raw instanceof Date && !isNaN(raw.getTime())){
+
+  // SheetJS hands back an Excel serial number unless the file was read with
+  // cellDates:true. Convert it here rather than relying on every caller to
+  // pass that option — one page missing it silently shifted every date by a
+  // day and the numbers looked plausible enough to hide it for a while.
+  //
+  // Serial 1 is 1 Jan 1900, with Excel's phantom 29 Feb 1900 to skip. Built
+  // from UTC parts so the machine's timezone can't move the calendar day.
+  if(typeof raw === 'number' && raw > 0 && raw < 300000){
+    const ms = Math.round((raw - 25569) * 86400000);
+    const d = new Date(ms);
+    if(!isNaN(d.getTime())){
+      return `${d.getUTCFullYear()}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())}`;
+    }
+  }
+
+  // A date-only cell read with cellDates arrives as midnight UTC. Reading it
+  // with local getters shifts it a day earlier west of Greenwich.
+  const rd = asDate(raw);
+  if(rd){
+    raw = rd;
     if(raw.getUTCHours() === 0 && raw.getUTCMinutes() === 0 &&
        raw.getUTCSeconds() === 0 && raw.getUTCMilliseconds() === 0){
       return `${raw.getUTCFullYear()}-${pad(raw.getUTCMonth()+1)}-${pad(raw.getUTCDate())}`;
@@ -1180,19 +1199,39 @@ function isoDay(raw){
   const str = String(raw).trim();
   if(!str || norm(str) === 'none' || str === '- None -') return null;
 
-  // A plain date string is a calendar date with no timezone. Build it directly
-  // rather than letting Date.parse decide, which treats YYYY-MM-DD as UTC.
+  // A plain date string is a calendar date with no timezone, so read the parts
+  // directly rather than letting Date.parse treat YYYY-MM-DD as UTC.
   const m = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
   if(m) return `${m[1]}-${m[2]}-${m[3]}`;
   const us = str.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{2,4})/);
   if(us){
-    let y = us[3].length === 2 ? '20' + us[3] : us[3];
+    const y = us[3].length === 2 ? '20' + us[3] : us[3];
     return `${y}-${pad(us[1])}-${pad(us[2])}`;
   }
+  if(/^\d+(\.\d+)?$/.test(str)) return isoDay(Number(str));
 
   const d = parseDateRobust(raw);
   if(!d || isNaN(d.getTime()) || d.getFullYear() < 2000) return null;
   return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+}
+
+// The ISO day N days before today.
+function daysAgo(n){
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  const pad = x => String(x).padStart(2,'0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+}
+
+// A Date produced in another JavaScript realm fails `instanceof Date`, which
+// silently turned every timestamp comparison into a fallback. Duck-type instead.
+function asDate(v){
+  if(!v) return null;
+  if(typeof v.getTime === 'function' && typeof v.getFullYear === 'function'){
+    const t = v.getTime();
+    return isNaN(t) ? null : v;
+  }
+  return null;
 }
 
 function isoToday(){
@@ -1211,6 +1250,8 @@ const ORDER_STATUS = {
     docField:['PO/Check Number'],
     dateField:['Date'],
     channelField:['Order Source','Sales Channel','Order Type'],
+    statusField:['NetSuite Status','Status'],
+    wmsStatusField:['WMS Status'],
     // Only used as a fallback when the Avectous file has no record of an order.
     nsShippedField:['Fulfillment Status'],
     nsShipDateField:['Date Fulfilled']
@@ -1222,6 +1263,8 @@ const ORDER_STATUS = {
     docField:['Document Number'],
     dateField:['Date'],
     channelField:['Channel','To Location'],
+    statusField:['NetSuite Status','Status'],
+    wmsStatusField:['WMS Status'],
     nsShippedField:['Fulfillment Status'],
     nsShipDateField:['Date Fulfilled']
   },
@@ -1240,7 +1283,22 @@ const ORDER_STATUS = {
 
 // Which orders Avectous shipped, and the day each one went. The report is
 // line-level, so an order appears once per line and shipped on the last of them.
-function avectousShippedKeys(data){
+// Avectous no longer exports shipments in one file, so several are loaded and
+// merged. Rows are simply concatenated — the columns are identical across the
+// splits, and an order appearing in two files just resolves to its later ship
+// date, which is what a single combined export would have given anyway.
+function mergeSheets(list){
+  const sheets = [].concat(list || []).filter(d => d && d.rows && d.rows.length);
+  if(!sheets.length) return null;
+  if(sheets.length === 1) return sheets[0];
+  const headers = sheets[0].headers;
+  const rows = [];
+  sheets.forEach(d => d.rows.forEach(r => rows.push(r)));
+  return { headers, rows, fileCount: sheets.length };
+}
+
+function avectousShippedKeys(input){
+  const data = mergeSheets(input);
   if(!data || !data.rows || !data.rows.length) return null;
   const col = guessColumn(data.headers, ORDER_STATUS.shipments.keyField);
   if(!col) return { error:`Could not find an "OrderNumber" column in the shipments file. Columns found: ${data.headers.join(', ')}` };
@@ -1253,8 +1311,20 @@ function avectousShippedKeys(data){
     const prev = days.get(k);
     if(prev === undefined || (d && (!prev || d > prev))) days.set(k, d || prev || null);
   });
-  return { set:new Set(days.keys()), days, keyColumn:col, dateColumn:dateCol || null };
+  return { set:new Set(days.keys()), days, keyColumn:col, dateColumn:dateCol || null,
+           fileCount: data.fileCount || 1 };
 }
+
+// A NetSuite order has reached one of these once it has shipped. Sales orders
+// move toward billing; transfer orders toward receipt at the far end.
+const SHIPPED_STATUSES = new Set([
+  'Billed', 'Pending Billing', 'Partially Fulfilled', 'Pending Billing/Partially Fulfilled',
+  'Received', 'Pending Receipt', 'Pending Receipt/Partially Fulfilled'
+]);
+// Dead orders. Not shipped, but not waiting either — they should not sit in an
+// open list.
+const DEAD_STATUSES = new Set(['Closed', 'Cancelled']);
+const DEAD_WMS = new Set(['Cancellation Confirmed', 'Pending Cancellation', 'Cancellation Failed']);
 
 // Two facts per order: the day it was created, and the day it shipped.
 //
@@ -1269,6 +1339,11 @@ function computeOrderStatusSide(data, cfg, avShipped, avDays){
   const dateCol = guessColumn(data.headers, cfg.dateField);
   const chanCol = guessColumn(data.headers, cfg.channelField);
   const nsShipCol = guessColumn(data.headers, cfg.nsShippedField);
+  // Carried through for the open-orders export only. Nothing on this tab
+  // filters on them — an order is shipped or it isn't. But an open list is a
+  // working list, and knowing a row is Closed changes what you do with it.
+  const statusCol = guessColumn(data.headers, cfg.statusField);
+  const wmsStatCol = guessColumn(data.headers, cfg.wmsStatusField);
   const nsDateCol = guessColumn(data.headers, cfg.nsShipDateField);
 
   if(!keyCol || !docCol || !dateCol){
@@ -1282,17 +1357,19 @@ function computeOrderStatusSide(data, cfg, avShipped, avDays){
     let o = orders.get(key);
     if(!o){ o = { doc:'', created:null, chan:null, nsShipped:false, nsDay:null }; orders.set(key, o); }
     if(!o.doc){ const d = String(row[docCol] ?? '').trim(); if(d) o.doc = d; }
+    if(statusCol && !o.status){ const v = String(row[statusCol] ?? '').trim(); if(v) o.status = v; }
+    if(wmsStatCol && !o.wms){ const v = String(row[wmsStatCol] ?? '').trim(); if(v) o.wms = v; }
     if(!o.created) o.created = isoDay(row[dateCol]);
     if(chanCol && !o.chan){ const c = String(row[chanCol] ?? '').trim(); if(c) o.chan = c; }
     if(nsShipCol && norm(row[nsShipCol]) === 'fulfilled') o.nsShipped = true;
     if(nsDateCol && !o.nsDay) o.nsDay = isoDay(row[nsDateCol]);
   });
 
-  let shipped = 0, open = 0;
+  let shipped = 0, open = 0, deadCount = 0;
   const byCreated = {};   // created day -> { total, shipped }
   const byShipped = {};   // ship day -> count out the door
   const byChannel = {};
-  const ledger = [];
+  const ledger = [], openLedger = [];
   const BLANK = 'Not set';
 
   let excludedBeforeStart = 0;
@@ -1305,8 +1382,23 @@ function computeOrderStatusSide(data, cfg, avShipped, avDays){
 
     const inAv   = !!(avShipped && o.doc && avShipped.has(o.doc));
     const avDay  = (avDays && o.doc) ? (avDays.get(o.doc) || null) : null;
-    const didShip = inAv || o.nsShipped;
+
+    // Shipped if EITHER system says so.
+    //
+    // Avectous alone is not enough: 4,201 orders billed in NetSuite, 2,952 with
+    // WMS Status Fulfilled, were landing in the open list because the Avectous
+    // shipment export had no record of them. An order that NetSuite has
+    // invoiced has plainly gone out, whatever the warehouse file says.
+    const nsSaysShipped = o.nsShipped
+      || SHIPPED_STATUSES.has(o.status)
+      || norm(o.wms) === 'fulfilled';
+    const didShip = inAv || nsSaysShipped;
     const shipDay = avDay || o.nsDay || null;
+
+    // Cancelled and closed orders are neither shipped nor waiting. Counting
+    // them as open puts dead orders on a working list.
+    const dead = DEAD_STATUSES.has(o.status) || DEAD_WMS.has(o.wms);
+    if(dead && !didShip){ deadCount++; return; }
 
     if(didShip) shipped++; else open++;
 
@@ -1324,6 +1416,11 @@ function computeOrderStatusSide(data, cfg, avShipped, avDays){
 
     ledger.push([key, o.doc, o.created || '', didShip ? 'Shipped' : 'Open',
                  shipDay || '', ch, inAv ? 'Yes' : 'No', o.nsShipped ? 'Yes' : 'No']);
+    // A four-column list of just the open orders, kept because the full
+    // ledger is stripped before the result is stored — 3.7 MB against 581 KB.
+    // Without this the "Export open orders" button produced an empty sheet
+    // after any page reload.
+    if(!didShip) openLedger.push([o.created || '', key, o.doc, ch, o.status || '', o.wms || '']);
   });
 
   return {
@@ -1331,10 +1428,12 @@ function computeOrderStatusSide(data, cfg, avShipped, avDays){
     totalRows:data.rows.length,
     ordersInFile: orders.size,
     excludedBeforeStart,
-    totalOrders: orders.size - excludedBeforeStart,
+    deadExcluded: deadCount,
+    totalOrders: orders.size - excludedBeforeStart - deadCount,
     shipped, open,
-    pctShipped: (orders.size - excludedBeforeStart) ? (shipped / (orders.size - excludedBeforeStart)) * 100 : 0,
+    pctShipped: (orders.size - excludedBeforeStart - deadCount) ? (shipped / (orders.size - excludedBeforeStart - deadCount)) * 100 : 0,
     byCreated, byShipped, byChannel,
+    openLedger,
     inOut: inOutSeries(byCreated, byShipped),
     // Prebooks dated after today. Counted in the totals — they are real orders —
     // but they cannot appear on a daily table that stops at today, so the count
@@ -1342,7 +1441,7 @@ function computeOrderStatusSide(data, cfg, avShipped, avDays){
     futureDated: Object.keys(byCreated).filter(d => d > isoToday())
                    .reduce((n,d)=> n + byCreated[d].total, 0),
     ledger,
-    reconciles: (shipped + open) === (orders.size - excludedBeforeStart)
+    reconciles: (shipped + open) === (orders.size - excludedBeforeStart - deadCount)
   };
 }
 
@@ -1400,6 +1499,7 @@ function computeOrderStatus(soData, toData, shipData){
     so, to,
     total:{ totalOrders, shipped, open: sum('open'),
             excludedBeforeStart: sum('excludedBeforeStart'),
+            deadExcluded: sum('deadExcluded'),
             pctShipped: totalOrders ? (shipped / totalOrders) * 100 : 0 },
     shipmentsFile: av ? (av.error ? { error:av.error } : { orders:av.set.size, dateColumn:av.dateColumn }) : null,
     computedAt: isoToday()
@@ -1407,13 +1507,29 @@ function computeOrderStatus(soData, toData, shipData){
 }
 
 // Shared save path used by both the Order Status tab and Load Data.
+// The per-order ledger exists only to build the export. It is 34,000 rows and
+// roughly 2.8 MB of JSON — big enough that the POST to the shared store can
+// fail, in which case the server quietly keeps the previous run and every
+// browser shows stale numbers. Strip it before sending: the shared copy drops
+// to about 11 KB, and the ledger stays in this browser for the export.
+function stripLedgers(result){
+  if(!result || typeof result !== 'object') return result;
+  const out = { ...result, ledgersDropped: true };
+  ['so','to'].forEach(k=>{
+    // openLedger deliberately survives — it is what the open-orders export
+    // reads, and at 581 KB it fits where the 3.7 MB full ledger did not.
+    if(out[k] && out[k].ledger) out[k] = { ...out[k], ledger: [] };
+  });
+  return out;
+}
+
 async function syncSectionToShared(sectionId, result, ranBy){
   saveSectionResult(sectionId, result, ranBy);
   try{
     const res = await fetch('/api/data', {
       method:'POST',
       headers:{'content-type':'application/json'},
-      body: JSON.stringify({ sectionId, result, ranBy: ranBy || null })
+      body: JSON.stringify({ sectionId, result: stripLedgers(result), ranBy: ranBy || null })
     });
     if(!res.ok){
       const body = await res.json().catch(()=>({}));
@@ -1449,16 +1565,27 @@ async function syncSectionToShared(sectionId, result, ranBy){
    so each NetSuite search is matched against the whole file
    rather than trusting the OrderType column.
 =========================================================== */
+// A NetSuite order reaches one of these once it has shipped. Used only where
+// the export has no Fulfillment Status column to read instead.
+// Statuses a NetSuite order reaches once it has shipped. Sales orders move
+// toward billing; transfer orders move toward receipt at the far end.
+const NS_SHIPPED_STATUSES = new Set([
+  'Billed', 'Pending Billing', 'Partially Fulfilled', 'Pending Billing/Partially Fulfilled',
+  'Received', 'Pending Receipt', 'Pending Receipt/Partially Fulfilled'
+]);
+
 const INTEGRATIONS = {
   id:'integrations',
   queueMinutes:15,
   sources:{
-    so:{ label:'Fulfillable Sales Orders', search:'4866',
-         url:'https://11170298.app.netsuite.com/app/common/search/savedsearchresults.nl?searchid=4866&saverun=T&whence=',
-         keyField:['PO/Check Number'], hint:'BYLTFulfillableSalesOrdersResults' },
-    to:{ label:'Fulfillable Transfer Orders', search:'4867',
-         url:'https://11170298.app.netsuite.com/app/common/search/savedsearchresults.nl?searchid=4867&saverun=T&whence=',
-         keyField:['Document Number'], hint:'BYLTFulfillableTransferOrdersResults' },
+    // Same two exports Order Status uses, so the two tabs can never disagree
+    // about which orders exist.
+    so:{ label:'Sales Orders — NetSuite', search:'4875',
+         url:'https://11170298.app.netsuite.com/app/common/search/savedsearchresults.nl?searchid=4875&saverun=T&whence=',
+         keyField:['PO/Check Number'], hint:'NetSuiteAllOrdersReport' },
+    to:{ label:'Transfer Orders — NetSuite', search:'4872',
+         url:'https://11170298.app.netsuite.com/app/common/search/savedsearchresults.nl?searchid=4872&saverun=T&whence=',
+         keyField:['Document Number'], hint:'NetSuiteAllTransferOrdersReport' },
     sync:{ label:'Avectous Orders', hint:'Orders(...).xlsx — the order download',
            keyField:['OrderNumber'] },
     ship:{ label:'Avectous Shipment Details', hint:'the line-level report with a RecordDate column',
@@ -1470,12 +1597,44 @@ const INTEGRATIONS = {
 function nsOrderIndex(data, keyField){
   const keyCol = guessColumn(data.headers, keyField);
   const idCol  = guessColumn(data.headers, ['Internal ID']);
-  const stCol  = guessColumn(data.headers, ['Fulfillment Status']);
+  // guessColumn matches loosely, so asking it for 'Fulfillment Status' happily
+  // returns plain 'Status' — which then gets tested for the word "Fulfilled"
+  // and never matches, silently zeroing both fulfillment cards. Match exactly.
+  const stCol = data.headers.find(h => norm(h) === 'fulfillmentstatus') || null;
   const dtCol  = guessColumn(data.headers, ['Date']);
-  const statusCol = guessColumn(data.headers, ['Status']);
+  // Date Created carries a timestamp where Date is date-only, so it is the one
+  // that can tell a same-day order from one that has been sitting. Order Status
+  // deliberately stays on Date — switching it would move orders between days on
+  // figures already shared.
+  // norm() strips spaces, so the comparison value must be spaceless too —
+  // matching against 'date created' silently never fired, and every order fell
+  // back to the order-date rule that excused all of today.
+  const createdCol = data.headers.find(h => norm(h) === 'datecreated') || null;
+  // Column names differ between the old fulfillable searches and the newer
+  // all-orders reports, so accept either. Order Status does the same.
+  const statusCol = guessColumn(data.headers, ['NetSuite Status','Status']);
   const wmsCol = guessColumn(data.headers, ['WMS Status']);
-  const typeCol = guessColumn(data.headers, ['Order Type']);
-  if(!keyCol || !stCol) return { error:`Could not find the columns needed. Looked for "${[].concat(keyField).join('" or "')}" and "Fulfillment Status". Found: ${data.headers.join(', ')}` };
+  // When NetSuite says it sent the order. Stamped on send, not on receipt, and
+  // the queue search excludes anything already stamped — so a stamped order
+  // that never arrived will never be retried.
+  const expCol = guessColumn(data.headers, ['WMS Export Date']);
+  // Deliberate holds. An order flagged either way is being kept out of the
+  // warehouse on purpose, so its absence there is correct, not a failure.
+  const whCol = guessColumn(data.headers, ['Withhold from WMS','Withhold From WOS']);
+  const ptCol = guessColumn(data.headers, ['Payment Terms Hold']);
+  // A backordered order has nothing to ship, so it is held back on purpose —
+  // unless CX has approved shipping what's on hand, in which case it should
+  // have gone across.
+  // WOS BO Hold, not Has BO or Closed Line.
+  //
+  // The older flag is set by a script that misses live backorders and never
+  // clears once residual lines close after shipment — 24,011 orders carry it
+  // against 382 on WOS BO Hold, and 130 orders are BO-held while it reads No.
+  // Relying on it wrongly excused 9 real sync failures.
+  const boCol  = data.headers.find(h => norm(h) === 'wosbohold') || null;
+  const psrCol = guessColumn(data.headers, ['Partial Ship Request']);
+  const typeCol = guessColumn(data.headers, ['Order Source','Order Type','Sales Channel','Channel']);
+  if(!keyCol) return { error:`Could not find an order number column. Looked for "${[].concat(keyField).join('" or "')}". Found: ${data.headers.join(', ')}` };
 
   const byKey = new Map();
   data.rows.forEach(row=>{
@@ -1488,19 +1647,36 @@ function nsOrderIndex(data, keyField){
             status: statusCol ? String(row[statusCol] ?? '').trim() : '',
             wms: wmsCol ? String(row[wmsCol] ?? '').trim() : '',
             type: typeCol ? String(row[typeCol] ?? '').trim() : '',
+            createdAt: createdCol ? row[createdCol] : null,
+            exportedAt: expCol ? row[expCol] : null,
+            withheld:false, paymentHold:false, backordered:false, partialOk:false,
             cancelled:false };
       byKey.set(k, o);
     }
     if(!o.cancelled && isCancelled(wmsCol ? row[wmsCol] : '', statusCol ? row[statusCol] : '')){
       o.cancelled = true;
     }
-    if(norm(row[stCol]) === norm('Fulfilled')) o.fulfilled = true;
+    // Has NetSuite recorded this as shipped? Either signal counts.
+    //
+    // The Fulfillment Status formula column is absent from the all-orders
+    // reports, and on the transfer order report it exists but returns
+    // Unfulfilled on every row — the fulfillingtransaction join behaves
+    // differently there. Taking either signal means one broken source can't
+    // zero the card, which is exactly what happened before.
+    if(boCol  && norm(row[boCol])  === 'yes') o.backordered = true;
+    if(psrCol && norm(row[psrCol]) === 'yes') o.partialOk = true;
+    if(whCol && norm(row[whCol]) === 'yes') o.withheld = true;
+    if(ptCol && norm(row[ptCol]) === 'yes') o.paymentHold = true;
+    if(stCol && norm(row[stCol]) === 'fulfilled') o.fulfilled = true;
+    if(statusCol && NS_SHIPPED_STATUSES.has(String(row[statusCol] ?? '').trim())) o.fulfilled = true;
   });
   return { byKey, keyColumn:keyCol };
 }
 
 // Collapses an Avectous export to one entry per order number.
-function avOrderIndex(data, cfg){
+function avOrderIndex(input, cfg){
+  // Shipments now arrive as several exports; merge before indexing.
+  const data = mergeSheets(input);
   const keyCol = guessColumn(data.headers, cfg.keyField);
   const dateCol = cfg.dateField ? guessColumn(data.headers, cfg.dateField) : null;
   const typeCol = guessColumn(data.headers, ['OrderType']);
@@ -1559,23 +1735,149 @@ function computeIntegrations(soData, toData, syncData, shipData){
   const shipDatesMissing = !av.ship.dateColumn;
 
   // NetSuite -> Avectous. Every order NetSuite holds should be in the download.
+  // NetSuite -> Avectous. Only an order still waiting to ship can be a sync
+  // failure.
+  //
+  // An order that is Billed, Pending Billing or Partially Fulfilled has already
+  // gone out — whatever Avectous's current records say, it clearly received it.
+  // Cancelled and Closed are dead. Pending Approval is a CX exception, held on
+  // purpose. Counting any of those as "never reached the warehouse" turned a
+  // 97.8% queue into a 95.5% one and buried the orders that actually need
+  // chasing.
+  const SYNC_WAITING = 'Pending Fulfillment';
+  // An order only counts as a sync failure once it has had a fair chance to
+  // arrive. The queue runs every 15 minutes, so an hour is four cycles.
+  //
+  // An hour is right rather than generous: WMS Export Date is stamped when
+  // NetSuite sends, not when Avectous confirms receipt, and the queue search
+  // excludes anything already stamped. So a failed push is never retried —
+  // order #55706590 was stamped at 15:11 and has never arrived. Waiting longer
+  // would only delay noticing.
+  //
+  // Timed from Date Created, which carries a timestamp. An earlier version
+  // excused everything created today, which hid 230 orders that had been
+  // sitting for hours — the failures cluster in specific push batches
+  // (10:57-10:59, 13:26-13:28), so a whole-day grace period misses them
+  // entirely.
+  //
+  // "Now" is the newest Date Created in the file rather than the browser clock,
+  // so a file pulled hours ago doesn't start counting fresh orders as failures.
+  const GRACE_MINUTES = 60;
+
   function syncAudit(nsSide, label){
-    const missing = [], cancelledRows = [];
-    let matched = 0, total = 0;
+    // "Now" is the newest Date Created in this file rather than the browser
+    // clock, so a file pulled hours ago doesn't start treating fresh orders as
+    // failures.
+    let fileNow = 0;
     nsSide.byKey.forEach(o=>{
-      // A cancelled order is not a sync failure — CX is trying to stop it.
-      if(o.cancelled){
-        cancelledRows.push([o.key, o.id, o.orderDay || '', o.type, o.status, o.wms]);
+      const d = asDate(o.createdAt);
+      const t = d ? d.getTime() : 0;
+      if(t > fileNow) fileNow = t;
+    });
+    if(!fileNow) fileNow = Date.now();
+
+    const stillInFlight = o=>{
+      const created = asDate(o.createdAt);
+      if(created){
+        return (fileNow - created.getTime()) / 60000 < GRACE_MINUTES;
+      }
+      // No timestamp to judge by, so fall back to the order date and give only
+      // today's orders the benefit of the doubt.
+      return !!(o.orderDay && o.orderDay >= isoToday());
+    };
+
+    // A stamped order that never arrived is the worse case: NetSuite believes
+    // it was handled and will never send it again.
+    const fmtStamp = v => {
+      const dv = asDate(v);
+      if(dv){
+        v = dv;
+        const p = n => String(n).padStart(2,'0');
+        return `${v.getFullYear()}-${p(v.getMonth()+1)}-${p(v.getDate())} ${p(v.getHours())}:${p(v.getMinutes())}`;
+      }
+      const s = String(v ?? '').trim();
+      return (!s || s === 'None' || s === '- None -') ? null : s;
+    };
+
+    const missing = [], excludedRows = [], inFlightRows = [];
+    let matched = 0, total = 0, inFlight = 0, inFile = 0, sentButAbsent = 0, neverSent = 0;
+    const excludedBy = {};
+
+    nsSide.byKey.forEach(o=>{
+      inFile++;
+      const arrived = av.sync.byKey.has(o.key) || av.ship.byKey.has(o.key);
+      if(arrived){ total++; matched++; return; }
+
+      // Not in Avectous. Is it actually waiting, or is it finished or held?
+      const nsWaiting  = norm(o.status) === norm(SYNC_WAITING);
+      const wmsWaiting = !o.wms || norm(o.wms) === norm(SYNC_WAITING);
+      // Backordered counts as held only where partial shipping hasn't been
+      // approved. With approval the warehouse should have it.
+      const held = o.withheld || o.paymentHold || (o.backordered && !o.partialOk);
+      if(nsWaiting && wmsWaiting && !held && stillInFlight(o)){
+        inFlight++;
+        inFlightRows.push([o.key, o.id, o.orderDay || '', o.type, o.status, o.wms]);
         return;
       }
-      total++;
-      if(av.sync.byKey.has(o.key)) matched++;
-      else missing.push([o.key, o.id, o.orderDay || '', o.type, o.status, o.wms]);
+      if(nsWaiting && wmsWaiting && !held){
+        total++;
+        const stamp = fmtStamp(o.exportedAt);
+        if(stamp) sentButAbsent++; else neverSent++;
+        missing.push([o.key, o.id, o.orderDay || '', o.type, o.status, o.wms,
+                      stamp || 'never exported']);
+        return;
+      }
+
+      // Report the most meaningful reason. Status comes first: an order that is
+      // already billed isn't "backordered", it's finished — and 869 of them
+      // carry the backorder flag from residual lines closing after shipment.
+      const why = !nsWaiting ? (o.status || 'no status')
+                : !wmsWaiting ? (o.wms || 'no WMS status')
+                : o.withheld ? 'Withheld from WMS'
+                : o.paymentHold ? 'Payment terms hold'
+                : 'On backorder hold';
+      excludedBy[why] = (excludedBy[why] || 0) + 1;
+      excludedRows.push([o.key, o.id, o.orderDay || '', o.type, o.status, o.wms, why]);
     });
+
     missing.sort((a,b)=> String(a[2]).localeCompare(String(b[2])));
-    return { label, direction:'NetSuite \u2192 Avectous', total, matched,
-             missing: missing.length, cancelled: cancelledRows.length, cancelledRows,
-             health: pctOf(matched, total), rows: missing };
+
+    // Split the missing by age. A day or more means it has had every chance to
+    // arrive; the rest are today's failures — worth chasing, but newer.
+    const dayAgo = fileNow - 86400000;
+    let missingAged = 0;
+    missing.forEach(r=>{
+      if(r[2] && Date.parse(r[2] + 'T23:59:59') < dayAgo) missingAged++;
+    });
+
+
+    // How long the genuinely-missing ones have been waiting. An order created
+    // in the last day or two may simply not have been pushed yet.
+    const cutoff = daysAgo(7);
+    const stale = missing.filter(r => r[2] && r[2] < cutoff).length;
+
+    // Held orders that reached the warehouse anyway — the opposite failure.
+    let heldButSent = 0;
+    const heldButSentRows = [];
+    nsSide.byKey.forEach(o=>{
+      if((o.withheld || o.paymentHold) && av.sync.byKey.has(o.key)){
+        heldButSent++;
+        heldButSentRows.push([o.key, o.id, o.orderDay || '', o.type, o.status, o.wms,
+                              o.withheld ? 'Withheld from WMS' : 'Payment terms hold']);
+      }
+    });
+
+    return { label, direction:'NetSuite \u2192 Avectous', total, matched, inFile,
+             missingAged,
+             inFlight, inFlightRows,
+             sentButAbsent, neverSent,
+             heldButSent, heldButSentRows,
+             missing: missing.length, rows: missing,
+             stale,
+             excluded: excludedRows.length, excludedRows,
+             excludedBy: Object.entries(excludedBy).sort((a,b)=> b[1]-a[1]),
+             cancelled: 0, cancelledRows: [],
+             health: pctOf(matched, total) };
   }
 
   // Avectous -> NetSuite. Every order Avectous shipped should have a
@@ -1625,8 +1927,14 @@ function computeIntegrations(soData, toData, syncData, shipData){
   // the handoff worked, this asks where the orders actually are. Cancelled
   // orders are included, because Avectous cancelling something is a status
   // worth seeing even though it's excluded from queue health.
+  // Avectous's order lifecycle, roughly in order. Batched, Picked and Packed
+  // sit between Waved and Shipped; leaving them out made 1,172 sales orders
+  // show up as an unrecognised status.
   const AV_STATUS_ORDER = [
     { key:'Shipped',   means:'Out the door' },
+    { key:'Packed',    means:'Packed, waiting to go' },
+    { key:'Picked',    means:'Picked off the shelf' },
+    { key:'Batched',   means:'Grouped for picking' },
     { key:'Waved',     means:'Queued, not yet shipped' },
     { key:'New',       means:'Just received' },
     { key:'Cancelled', means:'Avectous cancelled it' }

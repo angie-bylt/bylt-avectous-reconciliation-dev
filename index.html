@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <title>BYLT / Order Status — 810 Texas DC</title>
 <link rel="stylesheet" href="style.css">
-<script src="auth-check.js"></script>
+<script src="auth-check.js?v=57"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
 <body>
@@ -67,10 +67,11 @@
         <div class="upload-box">
           <label>3 &middot; Shipment Details &mdash; Avectous</label>
           <div style="font-size:11.5px; color:var(--muted); margin-bottom:7px;">
-            The line-level report with a <code>RecordDate</code> column &middot;
+            The line-level report with a <code>RecordDate</code> column.
+            <strong>Pick all of them at once</strong> if Avectous splits it by channel. &middot;
             <a href="#" id="link-ship" target="_blank" rel="noopener" style="color:var(--blue); font-weight:600;">Open in Avectous &#8599;</a>
           </div>
-          <input type="file" id="file-ship" accept=".csv,.xls,.xlsx">
+          <input type="file" id="file-ship" accept=".csv,.xls,.xlsx" multiple>
           <div class="upload-status" id="status-ship">No file loaded</div>
         </div>
       </div>
@@ -132,7 +133,7 @@
 
 </main>
 
-<script src="app.js"></script>
+<script src="app.js?v=57"></script>
 <script>
 const files = { so:null, to:null, ship:null };
 let current = null, savedAt = null, ranBy = null;
@@ -172,11 +173,54 @@ function smartRows(sheet){
   return {headers, rows};
 }
 
+// Box 3 takes several files, because Avectous now splits shipments by channel.
+// Each is parsed separately and merged at compute time.
+// Box 3 takes several files, because Avectous now splits shipments by channel.
+// Each is parsed separately and merged at compute time.
+//
+// The local list is deliberately NOT called `files` — that is the name of the
+// module-level upload registry, and shadowing it meant `files[side] = parsed`
+// wrote an index onto this array instead of registering the upload, leaving
+// Update Dashboard permanently disabled.
+function readFiles(fileList, side, statusEl){
+  const chosen = Array.from(fileList || []);
+  if(!chosen.length) return;
+  const parsed = [];
+  let done = 0, failed = 0;
+  statusEl.textContent = `Reading ${chosen.length} file${chosen.length === 1 ? '' : 's'}\u2026`;
+  statusEl.className = 'upload-status';
+  chosen.forEach(file=>{
+    const reader = new FileReader();
+    reader.onload = e=>{
+      try{
+        const wb = XLSX.read(new Uint8Array(e.target.result), {type:'array', cellDates:true});
+        parsed.push(smartRows(wb.Sheets[wb.SheetNames[0]]));
+      } catch(err){ failed++; }
+      if(++done === chosen.length) finish();
+    };
+    reader.onerror = ()=>{ failed++; if(++done === chosen.length) finish(); };
+    reader.readAsArrayBuffer(file);
+  });
+  function finish(){
+    if(!parsed.length){
+      statusEl.textContent = 'Could not read those files';
+      statusEl.className = 'upload-status err';
+      files[side] = null;
+    } else {
+      files[side] = parsed;
+      const rows = parsed.reduce((n,d)=> n + d.rows.length, 0);
+      statusEl.innerHTML = `<strong>${parsed.length} file${parsed.length === 1 ? '' : 's'}</strong> &mdash; ${rows.toLocaleString()} rows${failed ? ` &middot; ${failed} could not be read` : ''}`;
+      statusEl.className = 'upload-status ok';
+    }
+    maybeEnable();
+  }
+}
+
 function readFile(file, side, statusEl){
   const reader = new FileReader();
   reader.onload = e=>{
     try{
-      const wb = XLSX.read(new Uint8Array(e.target.result), {type:'array'});
+      const wb = XLSX.read(new Uint8Array(e.target.result), {type:'array', cellDates:true});
       const parsed = smartRows(wb.Sheets[wb.SheetNames[0]]);
       if(!parsed.rows.length) throw new Error('No data rows found in this file.');
       files[side] = parsed;
@@ -195,8 +239,13 @@ function readFile(file, side, statusEl){
 
 ['so','to','ship'].forEach(side=>{
   document.getElementById('file-'+side).addEventListener('change', e=>{
-    const f = e.target.files[0];
-    if(f) readFile(f, side, document.getElementById('status-'+side));
+    const chosen = e.target.files;
+    if(!chosen || !chosen.length) return;
+    const statusEl = document.getElementById('status-'+side);
+    // Shipments can arrive as several channel exports; the NetSuite boxes
+    // stay single-file.
+    if(side === 'ship') readFiles(chosen, side, statusEl);
+    else readFile(chosen[0], side, statusEl);
   });
 });
 
@@ -220,11 +269,20 @@ document.getElementById('runBtn').addEventListener('click', async ()=>{
   const result = computeOrderStatus(files.so, files.to, files.ship);
   const sync = await syncSectionToShared(ORDER_STATUS.id, result, name || null);
 
-  note.textContent = sync.ok
+  // Render what was just computed rather than re-reading the shared copy. If
+  // the save failed, re-reading would put the previous run back on screen and
+  // make it look as though pressing the button did nothing.
+  current = result;
+  savedAt = new Date().toISOString();
+  ranBy = name || ranBy;
+  render();
+  document.getElementById('asOf').textContent =
+    `Last updated ${new Date(savedAt).toLocaleString()}${ranBy ? ' by ' + ranBy : ''}`;
+
+  note.innerHTML = sync.ok
     ? 'Updated — everyone signing in will see these numbers.'
-    : `Saved on this computer, but the shared copy failed: ${sync.error}`;
+    : `<span style="color:var(--red);"><strong>These numbers are on this computer only.</strong> Saving the shared copy failed: ${escapeHtml(sync.error)}. Others will still see the previous run.</span>`;
   btn.disabled = false;
-  init();
 });
 
 /* ---------- rendering ---------- */
@@ -251,7 +309,7 @@ function heroBody(t, splitLine){
       <div class="os-hero-head">
         <div>
           <h2>All orders &mdash; 810 Texas DC</h2>
-          <p class="os-sub">Created in NetSuite &middot; shipments from Avectous &middot; from go-live 8/6${t.excludedBeforeStart ? ` &middot; ${fmt(t.excludedBeforeStart)} earlier order${t.excludedBeforeStart === 1 ? '' : 's'} excluded` : ''}</p>
+          <p class="os-sub">Created in NetSuite &middot; shipments from Avectous &middot; from go-live 8/6${t.excludedBeforeStart ? ` &middot; ${fmt(t.excludedBeforeStart)} earlier order${t.excludedBeforeStart === 1 ? '' : 's'} excluded` : ''}${t.deadExcluded ? ` &middot; ${fmt(t.deadExcluded)} cancelled or closed excluded` : ''}</p>
         </div>
         <div style="text-align:right;">
           <div style="font-size:26px; font-weight:800; color:var(--green); line-height:1;">${t.pctShipped.toFixed(1)}%</div>
@@ -335,10 +393,16 @@ function createdTable(r, label){
           <b class="pc">${totPct.toFixed(1)}%</b>
         </span>
       </div>`;
+  const side = label.indexOf('Sales') === 0 ? 'so' : 'to';
   return `
     <div class="os-section">
-      <h3>${label} &mdash; shipped and open, by the day the order came in</h3>
-      <div class="os-section-sub">Of the orders created on each day, how many have shipped by now. From go-live on 8/6.</div>
+      <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:16px;">
+        <div>
+          <h3>${label} &mdash; shipped and open, by the day the order came in</h3>
+          <div class="os-section-sub">Of the orders created on each day, how many have shipped by now. From go-live on 8/6.</div>
+        </div>
+        <button class="btn-ghost" data-openexport="${side}" style="white-space:nowrap;">Export open orders &darr;</button>
+      </div>
       <div class="bl-rows">${rows}${totalRow}</div>
 
     </div>`;
@@ -461,6 +525,60 @@ function exportProof(){
   }
 }
 
+// Every open order, listed by the day it came in. Two sheets: a day-by-day
+// summary that matches the section on screen, and one row per open order so
+// the total on any day can be traced to the orders behind it.
+function exportOpen(which){
+  if(!current) return;
+  const r = current[which];
+  if(!r || r.error || !r.ledger) return;
+  const label = which === 'so' ? 'Sales' : 'Transfer';
+  try{
+    const wb = XLSX.utils.book_new();
+
+    const S = [];
+    const push = function(){ S.push(Array.prototype.slice.call(arguments).map(function(x){ return x === undefined ? '' : x; })); };
+    push(label.toUpperCase() + ' ORDERS \u2014 OPEN BY DAY CREATED');
+    push('Figures as at', savedAt ? new Date(savedAt).toLocaleString() : new Date().toLocaleString());
+    push('Open means', 'no shipment for this order in the Avectous Shipment Details file.');
+    push();
+    push('Day', 'Created', 'Shipped', 'Open', '% shipped');
+    r.created.forEach(function(d){
+      push(d.dow + ' ' + d.day, d.total, d.shipped, d.open, (d.pct / 100));
+    });
+    push('All days', r.created.reduce(function(a,d){ return a + d.total; }, 0),
+                     r.created.reduce(function(a,d){ return a + d.shipped; }, 0),
+                     r.created.reduce(function(a,d){ return a + d.open; }, 0), '');
+    const sum = XLSX.utils.aoa_to_sheet(S);
+    sum['!cols'] = [{wch:16},{wch:11},{wch:11},{wch:11},{wch:11}];
+    XLSX.utils.book_append_sheet(wb, sum, 'Open by day');
+
+    // One row per open order, oldest first — the top of this sheet is what has
+    // been waiting longest.
+    // Prefer the compact open-only list, which survives being stored. Fall back
+    // to the full ledger when it is still in memory — right after an update.
+    const open = (r.openLedger && r.openLedger.length
+        ? r.openLedger.slice()
+        : (r.ledger || []).filter(function(row){ return row[3] === 'Open'; })
+                          .map(function(row){ return [row[2], row[0], row[1], row[5], '', '']; })
+      ).sort(function(a,b){ return String(a[0]).localeCompare(String(b[0])); });
+
+    if(!open.length){
+      alert('No open orders to export. If the numbers on screen came from an earlier run, press Update Dashboard first.');
+      return;
+    }
+    const sh = XLSX.utils.aoa_to_sheet([['Created','Internal ID','Order Number','Channel','NetSuite Status','WMS Status']].concat(open));
+    sh['!cols'] = [{wch:12},{wch:14},{wch:22},{wch:20},{wch:28},{wch:26}];
+    sh['!autofilter'] = { ref: XLSX.utils.encode_range({ s:{r:0,c:0}, e:{r:open.length, c:5} }) };
+    XLSX.utils.book_append_sheet(wb, sh, 'Open orders');
+
+    const d = new Date(); const pad = function(n){ return String(n).padStart(2,'0'); };
+    XLSX.writeFile(wb, 'BYLT_Open_' + label + '_' + d.getFullYear() + pad(d.getMonth()+1) + pad(d.getDate()) + '.xlsx');
+  } catch(err){
+    alert('Could not build the export: ' + err.message);
+  }
+}
+
 function render(){
   const el = document.getElementById('results');
   if(!current){
@@ -469,6 +587,11 @@ function render(){
     return;
   }
   document.getElementById('exportBtn').style.display = '';
+  setTimeout(function(){
+    document.querySelectorAll('[data-openexport]').forEach(function(b){
+      b.onclick = function(){ exportOpen(b.dataset.openexport); };
+    });
+  }, 0);
   el.innerHTML = `
     ${heroBlock(current.total, current)}
     ${notes(current)}
@@ -513,6 +636,9 @@ async function init(){
       mc.innerHTML = '<div class="mrow"><span class="k">Nothing loaded yet</span><span class="v">\u2014</span></div>';
     }
   }
+
+  const bv = document.getElementById('buildTag');
+  if(bv) bv.textContent = 'build ' + (typeof BUILD === 'undefined' ? '?' : BUILD);
 
   document.getElementById('asOf').textContent = savedAt
     ? `Last updated ${new Date(savedAt).toLocaleString()}${ranBy ? ' by ' + ranBy : ''}`
