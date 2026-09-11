@@ -2,13 +2,14 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>BYLT / Integrations Status &ndash; Orders</title>
+<title>DEV · BYLT / Integrations Status &ndash; Orders</title>
 <link rel="stylesheet" href="style.css">
-<script src="auth-check.js"></script>
+<script src="auth-check.js?v=55"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
 <body>
 
+<div class="dev-ribbon">DEV</div>
 <header class="topbar">
   <div class="brand">BYLT</div>
   <nav>
@@ -77,9 +78,10 @@
         <div class="upload-box">
           <label>4 &middot; Avectous Shipment Details</label>
           <div style="font-size:11.5px; color:var(--muted); margin-bottom:7px;">
-            The line-level report &mdash; has a <code>RecordDate</code> column
+            The line-level report &mdash; has a <code>RecordDate</code> column.
+            <strong>Pick all of them at once</strong> if Avectous splits it by channel.
           </div>
-          <input type="file" id="file-ship" accept=".csv,.xls,.xlsx">
+          <input type="file" id="file-ship" accept=".csv,.xls,.xlsx" multiple>
           <div class="upload-status" id="status-ship">No file loaded</div>
         </div>
       </div>
@@ -141,8 +143,8 @@
   </div>
 </main>
 
-<script src="app.js"></script>
-<script src="integrations-export.js?v=2"></script>
+<script src="app.js?v=55"></script>
+<script src="integrations-export.js?v=55"></script>
 <script>
 const files = { so:null, to:null, sync:null, ship:null };
 let current = null, savedAt = null, ranBy = null;
@@ -177,6 +179,41 @@ function smartRows(sheet){
   return {headers, rows};
 }
 
+// Box 4 takes several files, because Avectous now splits shipments by channel.
+function readFiles(fileList, side, statusEl){
+  const chosen = Array.from(fileList || []);
+  if(!chosen.length) return;
+  const parsed = [];
+  let done = 0, failed = 0;
+  statusEl.textContent = `Reading ${chosen.length} file${chosen.length === 1 ? '' : 's'}\u2026`;
+  statusEl.className = 'upload-status';
+  chosen.forEach(file=>{
+    const reader = new FileReader();
+    reader.onload = e=>{
+      try{
+        const wb = XLSX.read(new Uint8Array(e.target.result), {type:'array', cellDates:true});
+        parsed.push(smartRows(wb.Sheets[wb.SheetNames[0]]));
+      } catch(err){ failed++; }
+      if(++done === chosen.length) finish();
+    };
+    reader.onerror = ()=>{ failed++; if(++done === chosen.length) finish(); };
+    reader.readAsArrayBuffer(file);
+  });
+  function finish(){
+    if(!parsed.length){
+      statusEl.textContent = 'Could not read those files';
+      statusEl.className = 'upload-status err';
+      files[side] = null;
+    } else {
+      files[side] = parsed;
+      const rows = parsed.reduce((n,d)=> n + d.rows.length, 0);
+      statusEl.innerHTML = `<strong>${parsed.length} file${parsed.length === 1 ? '' : 's'}</strong> &mdash; ${rows.toLocaleString()} rows${failed ? ` &middot; ${failed} could not be read` : ''}`;
+      statusEl.className = 'upload-status ok';
+    }
+    maybeEnable();
+  }
+}
+
 function readFile(file, side, statusEl){
   const reader = new FileReader();
   reader.onload = e=>{
@@ -200,8 +237,12 @@ function readFile(file, side, statusEl){
 
 ['so','to','sync','ship'].forEach(side=>{
   document.getElementById('file-'+side).addEventListener('change', e=>{
-    const f = e.target.files[0];
-    if(f) readFile(f, side, document.getElementById('status-'+side));
+    const chosen = e.target.files;
+    if(!chosen || !chosen.length) return;
+    const statusEl = document.getElementById('status-'+side);
+    // Avectous splits shipments by channel now, so box 4 takes several files.
+    if(side === 'ship') readFiles(chosen, side, statusEl);
+    else readFile(chosen[0], side, statusEl);
   });
 });
 
@@ -252,10 +293,18 @@ function auditCard(a, isFulfil){
         <span class="lab">queue health</span>
       </div>
       <div class="ig-lines">
-        <div class="ig-line"><span class="k">${totalLabel}</span><span class="v">${fmt(a.total)}</span></div>
+        ${!isFulfil ? `
+        <div class="ig-line"><span class="k">Orders in NetSuite</span><span class="v">${fmt(a.inFile)}</span></div>
+        <div class="ig-line"><span class="k">Excluded &mdash; not waiting to ship</span><span class="v" style="color:var(--muted);">${fmt(a.excluded)}</span></div>
+        <div class="ig-line"><span class="k">Excluded &mdash; created in the last hour</span><span class="v" style="color:var(--muted);">${fmt(a.inFlight)}</span></div>
+        <div class="ig-line subtotal"><span class="k">Should be in Avectous</span><span class="v">${fmt(a.total)}</span></div>`
+        : `<div class="ig-line"><span class="k">${totalLabel}</span><span class="v">${fmt(a.total)}</span></div>`}
         <div class="ig-line"><span class="k">${matchLabel}</span><span class="v">${fmt(a.matched)}</span></div>
         <div class="ig-line"><span class="k">Missing</span><span class="v ${a.missing ? 'bad' : ''}">${fmt(a.missing)}</span></div>
-        ${a.cancelled ? `<div class="ig-line"><span class="k">Cancelled, excluded</span><span class="v" style="color:var(--muted);">${fmt(a.cancelled)}</span></div>` : ''}
+        ${!isFulfil && a.missing ? `
+        <div class="ig-line sub"><span class="k">&nbsp;&nbsp;a day or more old</span><span class="v bad">${fmt(a.missingAged)}</span></div>
+        <div class="ig-line sub"><span class="k">&nbsp;&nbsp;an hour or more old</span><span class="v warn">${fmt(a.missing - a.missingAged)}</span></div>` : ''}
+        ${a.heldButSent ? `<div class="ig-line"><span class="k">Held, but in Avectous anyway</span><span class="v warn">${fmt(a.heldButSent)}</span></div>` : ''}
       </div>
       ${isFulfil && a.missing > 0 ? `
       <div class="ig-flag">
@@ -270,6 +319,7 @@ function auditCard(a, isFulfil){
           ? `NetSuite created this order but it never reached Avectous.`
           : `NetSuite created these ${fmt(a.missing)} orders but they never reached Avectous.`}
         <strong>The warehouse can't ship what it doesn't have.</strong>
+        ${a.sentButAbsent ? `<br>NetSuite stamped an export date on ${fmt(a.sentButAbsent)} of them, so it believes they were handled and will not send them again.` : ''}
       </div>` : ''}
     </div>`;
 }
@@ -355,13 +405,6 @@ function render(){
       aged. Check you loaded the <strong>Shipment Details</strong> report &mdash; the line-level one with
       a <code>RecordDate</code> column.
     </div>` : ''}
-
-    <div class="ig-src">
-      <div class="b"><div class="n">${fmt(c.nsSo)}</div><div class="l">Sales orders — NetSuite 4866${c.nsSoCancelled ? `<br>${fmt(c.nsSoCancelled)} cancelled excluded` : ''}</div></div>
-      <div class="b"><div class="n">${fmt(c.nsTo)}</div><div class="l">Transfer orders — NetSuite 4867${c.nsToCancelled ? `<br>${fmt(c.nsToCancelled)} cancelled excluded` : ''}</div></div>
-      <div class="b"><div class="n">${fmt(c.avSync)}</div><div class="l">Orders — Avectous</div></div>
-      <div class="b"><div class="n">${fmt(c.avShip)}</div><div class="l">Shipments — Avectous</div></div>
-    </div>
 
     <div class="ig-grid">
       ${auditCard(a.soSync, false)}

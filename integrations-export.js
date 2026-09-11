@@ -10,7 +10,7 @@
    remaining sheets are one row per problem order, filterable.
 =========================================================== */
 (function(){
-  const SYNC_HEADERS   = ['Order Number','NetSuite Internal ID','Order Date','Order Type','NetSuite Status','WMS Status'];
+  const SYNC_HEADERS   = ['Order Number','NetSuite Internal ID','Order Date','Order Type','NetSuite Status','WMS Status','WMS Export Date'];
   const FULFIL_HEADERS = ['Order Number','NetSuite Internal ID','Avectous Ship Date','Order Date','NetSuite Status','WMS Status','Age'];
   const ORPHAN_HEADERS = ['Order Number','Date','Order Type','Status','Channel','Found in','Kind'];
 
@@ -157,6 +157,13 @@
       add(wb, 'Method', meth);
 
       add(wb, 'SO Sync Missing',         ()=> sheet(SYNC_HEADERS,   a.soSync.rows));
+      // Everything the sync count deliberately left out, with the reason, so
+      // "why isn't this order on the missing list" is answerable from the file.
+      add(wb, 'SO Sync Excluded', ()=> sheet(SYNC_HEADERS.concat(['Excluded because']), a.soSync.excludedRows || []));
+      // The opposite failure: held in NetSuite, but the warehouse has it anyway.
+      add(wb, 'Held But In Avectous',
+        ()=> sheet(SYNC_HEADERS.concat(['Hold type']),
+             (a.soSync.heldButSentRows || []).concat(a.toSync.heldButSentRows || [])));
       add(wb, 'TO Sync Missing',         ()=> sheet(SYNC_HEADERS,   a.toSync.rows));
       add(wb, 'SO Fulfillments Missing', ()=> sheet(FULFIL_HEADERS, a.soFulfil.rows));
       add(wb, 'TO Fulfillments Missing', ()=> sheet(FULFIL_HEADERS, a.toFulfil.rows));

@@ -2,13 +2,14 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>BYLT / Order Status — 810 Texas DC</title>
+<title>DEV · BYLT / Order Status — 810 Texas DC</title>
 <link rel="stylesheet" href="style.css">
-<script src="auth-check.js?v=58"></script>
+<script src="auth-check.js?v=59"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
 <body>
 
+<div class="dev-ribbon">DEV</div>
 <header class="topbar">
   <div class="brand">BYLT</div>
   <nav>
@@ -133,7 +134,7 @@
 
 </main>
 
-<script src="app.js?v=58"></script>
+<script src="app.js?v=59"></script>
 <script>
 const files = { so:null, to:null, ship:null };
 let current = null, savedAt = null, ranBy = null;
@@ -362,7 +363,7 @@ function inOutTable(r, label, showDays){
           <td></td>
         </tr></tfoot>
       </table>
-      <div class="bl-foot">Every day since go-live on 8/6 with any activity, ${rows.length} in total. A day the DC is closed still takes orders &mdash; that gap is where backlog comes from.${r.futureDated ? ` <strong>${fmt(r.futureDated)} order${r.futureDated === 1 ? ' is' : 's are'} dated in the future and sit outside this table</strong> &mdash; they are counted in the channel totals below.` : ''}</div>
+      <div class="bl-foot">Every day since go-live on 8/6 with any activity, ${rows.length} in total. A day the DC is closed still takes orders &mdash; that gap is where backlog comes from.</div>
     </div>`;
 }
 
@@ -404,8 +405,7 @@ function createdTable(r, label){
         <button class="btn-ghost" data-openexport="${side}" style="white-space:nowrap;">Export open orders &darr;</button>
       </div>
       <div class="bl-rows">${rows}${totalRow}</div>
-      ${r.futureDated ? `<div class="bl-foot"><strong>${fmt(r.futureDated)} order${r.futureDated === 1 ? ' is' : 's are'} dated in the future and sit outside this table.</strong> A table that stops at today has no row for an order dated next month. They are counted in the channel totals below, which is why that total is ${fmt(r.futureDated)} higher.</div>` : ''}
-
+      
     </div>`;
 }
 
@@ -431,6 +431,13 @@ function channelTable(r, label){
       <table class="os-chan-table">
         <thead><tr><th>Channel</th><th class="n">Shipped</th><th class="n">Open</th><th class="n">Total</th><th class="n">% shipped</th></tr></thead>
         <tbody>${body}</tbody>
+        ${r.prebook ? `<tr class="ch-prebook">
+          <td class="os-chan-name">Prebook <span style="font-weight:400; font-size:11px; color:var(--muted);">(dated in the future &mdash; excluded)</span></td>
+          <td class="n" style="color:var(--muted);">&mdash;</td>
+          <td class="n" style="color:var(--muted);">&mdash;</td>
+          <td class="n" style="color:var(--muted);">${fmt(r.prebook)}</td>
+          <td class="n" style="color:var(--muted);">&mdash;</td>
+        </tr>` : ''}
         <tfoot><tr>
           <td>All channels</td><td class="n">${fmt(tot.shipped)}</td><td class="n">${fmt(tot.open)}</td>
           <td class="n">${fmt(tot.total)}</td><td class="n">${tot.total ? ((tot.shipped/tot.total)*100).toFixed(1) : 0}%</td>

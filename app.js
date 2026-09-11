@@ -1,6 +1,6 @@
 // Build 40 — if the dashboard shows a different build number, the browser is
 // serving a cached copy of this file. Hard-refresh, or bump the ?v= in the HTML.
-const BUILD = '58';
+const BUILD = '59';
 
 /* ===========================================================
    FULFILLMENT WIDGET — top-of-dashboard rollup, separate from the
@@ -1242,6 +1242,7 @@ function isoToday(){
 
 const ORDER_STATUS = {
   id:'order_status',
+  get today(){ return isoToday(); },
   title:'Order Status — 810 Texas DC',
   so:{
     label:'Sales orders',
@@ -1365,7 +1366,7 @@ function computeOrderStatusSide(data, cfg, avShipped, avDays){
     if(nsDateCol && !o.nsDay) o.nsDay = isoDay(row[nsDateCol]);
   });
 
-  let shipped = 0, open = 0, deadCount = 0;
+  let shipped = 0, open = 0, deadCount = 0, prebook = 0;
   const byCreated = {};   // created day -> { total, shipped }
   const byShipped = {};   // ship day -> count out the door
   const byChannel = {};
@@ -1409,10 +1410,19 @@ function computeOrderStatusSide(data, cfg, avShipped, avDays){
     }
     if(didShip && shipDay) byShipped[shipDay] = (byShipped[shipDay] || 0) + 1;
 
+    // Prebooks — orders dated ahead for a scheduled event — are held out of the
+    // channel counts. They cannot ship yet, so counting them as open overstates
+    // the backlog, and a daily table that stops at today has no row for them.
+    // Leaving them in made the channel total sit 26 above every other table on
+    // the page. They get their own row, showing the count and nothing else.
     const ch = o.chan || BLANK;
-    if(!byChannel[ch]) byChannel[ch] = { total:0, shipped:0, open:0 };
-    byChannel[ch].total++;
-    if(didShip) byChannel[ch].shipped++; else byChannel[ch].open++;
+    if(o.created && o.created > ORDER_STATUS.today){
+      prebook++;
+    } else {
+      if(!byChannel[ch]) byChannel[ch] = { total:0, shipped:0, open:0 };
+      byChannel[ch].total++;
+      if(didShip) byChannel[ch].shipped++; else byChannel[ch].open++;
+    }
 
     ledger.push([key, o.doc, o.created || '', didShip ? 'Shipped' : 'Open',
                  shipDay || '', ch, inAv ? 'Yes' : 'No', o.nsShipped ? 'Yes' : 'No']);
@@ -1433,6 +1443,7 @@ function computeOrderStatusSide(data, cfg, avShipped, avDays){
     shipped, open,
     pctShipped: (orders.size - excludedBeforeStart - deadCount) ? (shipped / (orders.size - excludedBeforeStart - deadCount)) * 100 : 0,
     byCreated, byShipped, byChannel,
+    prebook,
     openLedger,
     inOut: inOutSeries(byCreated, byShipped),
     // Prebooks dated after today. Counted in the totals — they are real orders —
