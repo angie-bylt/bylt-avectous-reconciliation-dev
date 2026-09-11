@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <title>BYLT / Order Status — 810 Texas DC</title>
 <link rel="stylesheet" href="style.css">
-<script src="auth-check.js?v=57"></script>
+<script src="auth-check.js?v=58"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
 <body>
@@ -133,7 +133,7 @@
 
 </main>
 
-<script src="app.js?v=57"></script>
+<script src="app.js?v=58"></script>
 <script>
 const files = { so:null, to:null, ship:null };
 let current = null, savedAt = null, ranBy = null;
@@ -362,7 +362,7 @@ function inOutTable(r, label, showDays){
           <td></td>
         </tr></tfoot>
       </table>
-      <div class="bl-foot">Every day since go-live on 8/6 with any activity, ${rows.length} in total. A day the DC is closed still takes orders &mdash; that gap is where backlog comes from.</div>
+      <div class="bl-foot">Every day since go-live on 8/6 with any activity, ${rows.length} in total. A day the DC is closed still takes orders &mdash; that gap is where backlog comes from.${r.futureDated ? ` <strong>${fmt(r.futureDated)} order${r.futureDated === 1 ? ' is' : 's are'} dated in the future and sit outside this table</strong> &mdash; they are counted in the channel totals below.` : ''}</div>
     </div>`;
 }
 
@@ -404,6 +404,7 @@ function createdTable(r, label){
         <button class="btn-ghost" data-openexport="${side}" style="white-space:nowrap;">Export open orders &darr;</button>
       </div>
       <div class="bl-rows">${rows}${totalRow}</div>
+      ${r.futureDated ? `<div class="bl-foot"><strong>${fmt(r.futureDated)} order${r.futureDated === 1 ? ' is' : 's are'} dated in the future and sit outside this table.</strong> A table that stops at today has no row for an order dated next month. They are counted in the channel totals below, which is why that total is ${fmt(r.futureDated)} higher.</div>` : ''}
 
     </div>`;
 }
