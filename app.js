@@ -1,6 +1,6 @@
 // Build 40 — if the dashboard shows a different build number, the browser is
 // serving a cached copy of this file. Hard-refresh, or bump the ?v= in the HTML.
-const BUILD = '59';
+const BUILD = '61';
 
 /* ===========================================================
    FULFILLMENT WIDGET — top-of-dashboard rollup, separate from the
@@ -1584,6 +1584,159 @@ const NS_SHIPPED_STATUSES = new Set([
   'Billed', 'Pending Billing', 'Partially Fulfilled', 'Pending Billing/Partially Fulfilled',
   'Received', 'Pending Receipt', 'Pending Receipt/Partially Fulfilled'
 ]);
+
+
+// ---------------------------------------------------------------------------
+// Angie — Overall
+//
+// One page answering "did yesterday work", end to end: Shopify to NetSuite to
+// Avectous and back, then out to invoices. Everything here is recomputed from
+// the uploads rather than read off the other tabs, so a stale stored result on
+// one tab can't quietly become the headline on another.
+// ---------------------------------------------------------------------------
+const OVERALL = {
+  id:'overall',
+  invoices:{    label:'Invoices — NetSuite',          search:'4904',
+    url:'https://11170298.app.netsuite.com/app/common/search/savedsearchresults.nl?searchid=4904&saverun=T&whence=' },
+  fulfillments:{ label:'Item Fulfillments — NetSuite', search:'4902',
+    url:'https://11170298.app.netsuite.com/app/common/search/savedsearchresults.nl?searchid=4902&saverun=T&whence=' },
+  shopify:{      label:'Orders — Shopify' }
+};
+
+// Shopify's export is one row per order name. Rows that aren't order names —
+// totals, blanks, returns keyed oddly — are dropped rather than counted.
+function shopifyOrderKeys(data){
+  const d = mergeSheets(data);
+  if(!d || !d.rows || !d.rows.length) return null;
+  const col = guessColumn(d.headers, ['Order name','Order Name','Name','Order']);
+  if(!col) return { error:`Could not find an "Order name" column. Found: ${d.headers.join(', ')}` };
+  const dayCol = guessColumn(d.headers, ['Day','Date']);
+  const set = new Set(), days = new Map();
+  d.rows.forEach(r=>{
+    const v = String(r[col] ?? '').trim();
+    if(!v || v.charAt(0) !== '#') return;
+    set.add(v);
+    if(dayCol){ const dy = isoDay(r[dayCol]); if(dy) days.set(v, dy); }
+  });
+  return { set, days, keyColumn:col, dateColumn:dayCol || null };
+}
+
+// Orders that have shipped but never got invoiced. Fulfillments are line-level,
+// so an order appears many times; we collapse to the order and keep its first
+// fulfillment date, which is the day the clock starts.
+function invoiceAudit(ifData, invData){
+  const f = mergeSheets(ifData), i = mergeSheets(invData);
+  if(!f || !f.rows || !f.rows.length) return null;
+  const fKey = guessColumn(f.headers, ['PO/Check Number','Created From','Order Number']);
+  const fDate = guessColumn(f.headers, ['Date']);
+  const fDoc = guessColumn(f.headers, ['Document Number']);
+  if(!fKey) return { error:`Could not find an order column on the fulfillment report. Found: ${f.headers.join(', ')}` };
+
+  const invKeys = new Set();
+  if(i && i.rows && i.rows.length){
+    const iKey = guessColumn(i.headers, ['PO/Check Number','Created From','Order Number']);
+    if(!iKey) return { error:`Could not find an order column on the invoice report. Found: ${i.headers.join(', ')}` };
+    i.rows.forEach(r=>{ const v = String(r[iKey] ?? '').trim(); if(v) invKeys.add(v); });
+  }
+
+  const orders = new Map();
+  f.rows.forEach(r=>{
+    const k = String(r[fKey] ?? '').trim();
+    if(!k) return;
+    const day = fDate ? isoDay(r[fDate]) : null;
+    const doc = fDoc ? String(r[fDoc] ?? '').trim() : '';
+    const cur = orders.get(k);
+    if(!cur) orders.set(k, { day, doc });
+    else if(day && (!cur.day || day < cur.day)) cur.day = day;
+  });
+
+  const missing = [];
+  orders.forEach((v,k)=>{ if(!invKeys.has(k)) missing.push([v.day || '', k, v.doc]); });
+  missing.sort((a,b)=> String(a[0]).localeCompare(String(b[0])));
+
+  const byDay = {};
+  orders.forEach((v,k)=>{
+    if(!v.day) return;
+    if(!byDay[v.day]) byDay[v.day] = { fulfilled:0, invoiced:0 };
+    byDay[v.day].fulfilled++;
+    if(invKeys.has(k)) byDay[v.day].invoiced++;
+  });
+
+  return {
+    fulfilledOrders: orders.size,
+    invoicedOrders: orders.size - missing.length,
+    missing: missing.length,
+    rows: missing,
+    byDay,
+    invoiceCount: invKeys.size,
+    health: pctOf(orders.size - missing.length, orders.size)
+  };
+}
+
+// Shopify against NetSuite. Shopify is the system of record for what the
+// customer placed, so anything it has that NetSuite doesn't never made it in.
+function shopifyAudit(shopKeys, nsSide, nsNewestDay){
+  if(!shopKeys || shopKeys.error) return shopKeys || null;
+  const missing = [], nsDocs = new Set();
+  let matched = 0, tooNew = 0;
+  nsSide.byKey.forEach(o=>{ if(o.key) nsDocs.add(o.key); });
+
+  shopKeys.set.forEach(k=>{
+    // A Shopify order placed after the NetSuite export was taken cannot be in
+    // it. Counting those as missing turns a file-timing gap into a false alarm
+    // — one mismatched pair reported 1,315 missing where the real figure was
+    // a handful.
+    const day = shopKeys.days ? shopKeys.days.get(k) : null;
+    if(nsNewestDay && day && day > nsNewestDay){ tooNew++; return; }
+    if(nsDocs.has(k)) matched++; else missing.push([day || '', k]);
+  });
+  missing.sort((a,b)=> String(a[0]).localeCompare(String(b[0])));
+  const measured = matched + missing.length;
+  return {
+    inShopify: shopKeys.set.size,
+    measured, tooNew,
+    inNetSuite: matched,
+    missing: missing.length,
+    rows: missing,
+    health: pctOf(matched, measured)
+  };
+}
+
+
+// Pulls the whole page together. Order Status logic for shipped/open, the
+// Integrations sync and fulfillment audits, plus the two new ones.
+function computeOverall(soData, toData, shipData, avOrders, shopData, ifData, invData){
+  const os = computeOrderStatus(soData, toData, shipData);
+  const ig = (avOrders || shipData) ? computeIntegrations(soData, toData, avOrders, shipData) : null;
+  const ns = nsOrderIndex(mergeSheets(soData), ORDER_STATUS.so.docField);
+  const shop = shopData ? shopifyOrderKeys(shopData) : null;
+  // When the NetSuite export was taken — the cutoff beyond which it simply
+  // cannot know about a Shopify order.
+  //
+  // Read from Date Created, not the transaction date: prebooks carry dates
+  // years out, so the newest transaction date is 2027 and no cutoff would ever
+  // apply.
+  let nsNewest = null;
+  ns.byKey.forEach(o=>{
+    const d = asDate(o.createdAt);
+    const day = d ? isoDay(d) : null;
+    if(day && (!nsNewest || day > nsNewest)) nsNewest = day;
+  });
+
+  return {
+    orderStatus: os && os.so && !os.so.error ? {
+      netsuite: os.so.totalOrders,
+      shipped:  os.so.shipped,
+      open:     os.so.open,
+      pct:      os.so.pctShipped
+    } : null,
+    shopify: shop ? shopifyAudit(shop, ns, nsNewest) : null,
+    sync:        ig && ig.audits ? ig.audits.soSync   : null,
+    fulfillments:ig && ig.audits ? ig.audits.soFulfil : null,
+    invoicing:   ifData ? invoiceAudit(ifData, invData) : null,
+    computedAt: isoToday()
+  };
+}
 
 const INTEGRATIONS = {
   id:'integrations',

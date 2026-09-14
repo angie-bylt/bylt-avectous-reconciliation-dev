@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DEV · Angie &ndash; Overall</title>
+<link rel="stylesheet" href="style.css?v=61">
+</head>
+<body>
+
+<div class="dev-ribbon">DEV</div>
+<header class="topbar">
+  <div class="brand">BYLT</div>
+  <nav>
+    <a href="index.html">Order Status</a>
+    <a href="integrations.html">Integrations Status &ndash; Orders</a>
+    <a href="integration-health.html">Inventory &amp; Shipping</a>
+    <a href="overall.html" class="current">Angie &ndash; Overall</a>
+    <a href="load-data.html">Load Data</a>
+    <a href="/api/logout">Log out</a>
+  </nav>
+</header>
+
+<div class="crumb">
+  <div>
+    <h1>Angie &mdash; Overall</h1>
+    <div class="path"><span id="asOf">Loading&hellip;</span> <span id="buildTag" style="color:var(--muted); font-size:11px;"></span></div>
+  </div>
+  <div class="crumb-actions">
+    <button id="exportBtn" class="btn-ghost" style="display:none;">Export missing &darr;</button>
+    <button class="btn-ghost" onclick="location.reload()">Refresh</button>
+  </div>
+</div>
+
+<main class="wrap">
+  <div id="results"></div>
+
+  <div class="panel os-method" id="uploadPanel">
+    <div class="os-method-head" onclick="togglePanel()">
+      <span>Update these numbers</span>
+      <span class="os-method-toggle" id="panelToggle">Open &#9662;</span>
+    </div>
+    <div class="os-method-body" id="panelBody" style="display:none;">
+      <p style="margin:0 0 14px; font-size:13px; color:var(--muted);">
+        Six files. The first three are the same ones Order Status uses &mdash; load them all at the same time,
+        or the comparisons between systems will report gaps that are only timing.
+      </p>
+
+      <div class="os-uploads" style="grid-template-columns:repeat(3,1fr);">
+        <div class="upload-box">
+          <label>1 &middot; Sales Orders &mdash; NetSuite</label>
+          <div style="font-size:11.5px; color:var(--muted); margin-bottom:7px;">
+            All orders report &middot; <a href="#" id="link-so" target="_blank" rel="noopener" style="color:var(--blue); font-weight:600;">Open &#8599;</a>
+          </div>
+          <input type="file" id="file-so" accept=".csv,.xls,.xlsx">
+          <div class="upload-status" id="status-so"></div>
+        </div>
+
+        <div class="upload-box">
+          <label>2 &middot; Transfer Orders &mdash; NetSuite</label>
+          <div style="font-size:11.5px; color:var(--muted); margin-bottom:7px;">
+            Transfer order report &middot; <a href="#" id="link-to" target="_blank" rel="noopener" style="color:var(--blue); font-weight:600;">Open &#8599;</a>
+          </div>
+          <input type="file" id="file-to" accept=".csv,.xls,.xlsx">
+          <div class="upload-status" id="status-to"></div>
+        </div>
+
+        <div class="upload-box">
+          <label>3 &middot; Shipment Details &mdash; Avectous</label>
+          <div style="font-size:11.5px; color:var(--muted); margin-bottom:7px;">
+            <strong>Pick all of them at once</strong> if it is split by channel &middot;
+            <a href="#" id="link-ship" target="_blank" rel="noopener" style="color:var(--blue); font-weight:600;">Open &#8599;</a>
+          </div>
+          <input type="file" id="file-ship" accept=".csv,.xls,.xlsx" multiple>
+          <div class="upload-status" id="status-ship"></div>
+        </div>
+
+        <div class="upload-box">
+          <label>4 &middot; Orders &mdash; Avectous</label>
+          <div style="font-size:11.5px; color:var(--muted); margin-bottom:7px;">
+            The order list, for the sync check
+          </div>
+          <input type="file" id="file-sync" accept=".csv,.xls,.xlsx">
+          <div class="upload-status" id="status-sync"></div>
+        </div>
+
+        <div class="upload-box">
+          <label>5 &middot; Item Fulfillments &mdash; NetSuite</label>
+          <div style="font-size:11.5px; color:var(--muted); margin-bottom:7px;">
+            Search 4902 &middot; <a href="#" id="link-if" target="_blank" rel="noopener" style="color:var(--blue); font-weight:600;">Open &#8599;</a>
+          </div>
+          <input type="file" id="file-if" accept=".csv,.xls,.xlsx">
+          <div class="upload-status" id="status-if"></div>
+        </div>
+
+        <div class="upload-box">
+          <label>6 &middot; Invoices &mdash; NetSuite</label>
+          <div style="font-size:11.5px; color:var(--muted); margin-bottom:7px;">
+            Search 4904 &middot; <a href="#" id="link-inv" target="_blank" rel="noopener" style="color:var(--blue); font-weight:600;">Open &#8599;</a>
+          </div>
+          <input type="file" id="file-inv" accept=".csv,.xls,.xlsx">
+          <div class="upload-status" id="status-inv"></div>
+        </div>
+
+        <div class="upload-box" style="grid-column:1 / -1;">
+          <label>7 &middot; Orders &mdash; Shopify <span style="font-weight:400; color:var(--muted);">(optional)</span></label>
+          <div style="font-size:11.5px; color:var(--muted); margin-bottom:7px;">
+            Export the order-name report as CSV &middot;
+            <a href="https://admin.shopify.com/store/bylt-apparel/analytics/reports/405471334" target="_blank" rel="noopener" style="color:var(--blue); font-weight:600;">Open in Shopify &#8599;</a>
+            &middot; leave it out and the Shopify row is skipped
+          </div>
+          <input type="file" id="file-shop" accept=".csv,.xls,.xlsx">
+          <div class="upload-status" id="status-shop"></div>
+        </div>
+      </div>
+
+      <div class="run-row">
+        <input type="text" id="ranBy" placeholder="Your name" style="max-width:180px;">
+        <button id="runBtn" class="btn-primary" disabled>Update</button>
+        <span id="runNote" style="font-size:12.5px; color:var(--muted);">Load files 1 to 6 to enable this.</span>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="app.js?v=61"></script>
+<script>
+let current = null, savedAt = null, ranBy = null;
+const files = { so:null, to:null, ship:null, sync:null, if:null, inv:null, shop:null };
+
+function togglePanel(){
+  const b = document.getElementById('panelBody'), t = document.getElementById('panelToggle');
+  const open = b.style.display !== 'none';
+  b.style.display = open ? 'none' : '';
+  t.innerHTML = open ? 'Open &#9662;' : 'Close &#9652;';
+}
+
+function smartRows(sheet){
+  const arr = XLSX.utils.sheet_to_json(sheet, { header:1, defval:'' });
+  let hi = 0;
+  for(let i = 0; i < Math.min(5, arr.length); i++){
+    if(arr[i].filter(c => c !== '').length > 1){ hi = i; break; }
+  }
+  const headers = (arr[hi] || []).map(x => String(x ?? '').trim());
+  const rows = [];
+  for(let i = hi + 1; i < arr.length; i++){
+    if(arr[i].filter(c => c !== '').length === 0) continue;
+    const o = {};
+    headers.forEach((h, j) => o[h] = arr[i][j] ?? '');
+    rows.push(o);
+  }
+  return { headers, rows };
+}
+
+function readFiles(fileList, side, statusEl){
+  const chosen = Array.from(fileList || []);
+  if(!chosen.length) return;
+  const parsed = [];
+  let done = 0, failed = 0;
+  statusEl.textContent = `Reading ${chosen.length} file${chosen.length === 1 ? '' : 's'}\u2026`;
+  statusEl.className = 'upload-status';
+  chosen.forEach(file=>{
+    const reader = new FileReader();
+    reader.onload = e=>{
+      try{
+        const wb = XLSX.read(new Uint8Array(e.target.result), { type:'array', cellDates:true });
+        parsed.push(smartRows(wb.Sheets[wb.SheetNames[0]]));
+      } catch(err){ failed++; }
+      if(++done === chosen.length) finish();
+    };
+    reader.onerror = ()=>{ failed++; if(++done === chosen.length) finish(); };
+    reader.readAsArrayBuffer(file);
+  });
+  function finish(){
+    if(!parsed.length){
+      statusEl.textContent = 'Could not read that';
+      statusEl.className = 'upload-status err';
+      files[side] = null;
+    } else {
+      files[side] = parsed.length === 1 ? parsed[0] : parsed;
+      const rows = parsed.reduce((n,d)=> n + d.rows.length, 0);
+      statusEl.innerHTML = parsed.length === 1
+        ? `<strong>${escapeHtml(chosen[0].name)}</strong> &mdash; ${rows.toLocaleString()} rows`
+        : `<strong>${parsed.length} files</strong> &mdash; ${rows.toLocaleString()} rows`;
+      statusEl.className = 'upload-status ok';
+    }
+    maybeEnable();
+  }
+}
+
+['so','to','ship','sync','if','inv','shop'].forEach(side=>{
+  document.getElementById('file-'+side).addEventListener('change', e=>{
+    if(e.target.files && e.target.files.length)
+      readFiles(e.target.files, side, document.getElementById('status-'+side));
+  });
+});
+
+function maybeEnable(){
+  const ready = files.so && files.to && files.ship && files.sync && files.if && files.inv;
+  document.getElementById('runBtn').disabled = !ready;
+  document.getElementById('runNote').textContent = ready
+    ? (files.shop ? 'Ready \u2014 press Update.' : 'Ready. Shopify not loaded, so that row will be skipped.')
+    : 'Load files 1 to 6 to enable this.';
+}
+
+const fmt = n => (n === null || n === undefined || isNaN(n)) ? '\u2014' : Number(n).toLocaleString();
+const pct = n => (n === null || n === undefined) ? '\u2014' : n.toFixed(2) + '%';
+
+function grade(h){ return h === null ? '' : h >= 99.5 ? 'good' : h >= 98 ? 'warn' : 'bad'; }
+
+function section(title, sub, lines, note){
+  return `
+    <div class="ov-card">
+      <div class="ov-head">
+        <div>
+          <h3>${title}</h3>
+          <div class="ov-sub">${sub}</div>
+        </div>
+      </div>
+      <div class="ov-lines">${lines}</div>
+      ${note || ''}
+    </div>`;
+}
+
+function line(label, value, cls){
+  return `<div class="ov-line"><span class="k">${label}</span><span class="v ${cls || ''}">${value}</span></div>`;
+}
+
+function render(){
+  const el = document.getElementById('results');
+  if(!current){
+    el.innerHTML = `<div class="panel"><div class="empty-state">No data yet &mdash; open "Update these numbers" below.</div></div>`;
+    document.getElementById('exportBtn').style.display = 'none';
+    return;
+  }
+  document.getElementById('exportBtn').style.display = '';
+
+  const os = current.orderStatus, sh = current.shopify,
+        sy = current.sync, fu = current.fulfillments, iv = current.invoicing;
+
+  let html = '';
+
+  // --- Order Status -------------------------------------------------------
+  html += section('Order status', 'Sales orders since go-live on 8/6',
+    (sh && !sh.error && sh.measured ? line('Orders in Shopify', fmt(sh.measured)) : '') +
+    line('Orders in NetSuite', fmt(os ? os.netsuite : null)) +
+    line('Shipped', fmt(os ? os.shipped : null), 'good') +
+    line('Open', fmt(os ? os.open : null), os && os.open ? 'bad' : '') +
+    line('Shipped', pct(os ? os.pct : null))
+  );
+
+  // --- Shopify -> NetSuite -------------------------------------------------
+  if(sh && !sh.error){
+    const skipped = sh.tooNew && !sh.measured;
+    html += section('Order integration health', 'Shopify &rarr; NetSuite',
+      line('Orders in Shopify', fmt(sh.inShopify)) +
+      (sh.tooNew ? line('Placed after the NetSuite export &mdash; not judged', fmt(sh.tooNew)) : '') +
+      line('Reached NetSuite', fmt(sh.inNetSuite), 'good') +
+      line('Missing', fmt(sh.missing), sh.missing ? 'bad' : ''),
+      skipped
+        ? `<div class="ov-note warn">Every Shopify order in this export was placed after the NetSuite export was taken, so none can be judged. Pull both files at the same time to measure this.</div>`
+        : (sh.missing ? `<div class="ov-note bad"><strong>${fmt(sh.missing)} orders are in Shopify but not in NetSuite.</strong> They have not entered the system at all, so nothing downstream will pick them up.</div>` : '')
+    );
+  }
+
+  // --- NetSuite -> Avectous ------------------------------------------------
+  if(sy && !sy.error){
+    html += section('Order sync', 'NetSuite &rarr; Avectous',
+      line('Should be in Avectous', fmt(sy.total)) +
+      line('Reached Avectous', fmt(sy.matched), 'good') +
+      line('Missing', fmt(sy.missing), sy.missing ? 'bad' : '') +
+      (sy.inFlight ? line('Created in the last hour &mdash; still in flight', fmt(sy.inFlight)) : ''),
+      sy.missing ? `<div class="ov-note bad"><strong>${fmt(sy.missing)} orders never reached the warehouse.</strong> Avectous cannot ship what it does not have.</div>` : ''
+    );
+  }
+
+  // --- Avectous -> NetSuite ------------------------------------------------
+  if(fu && !fu.error){
+    html += section('Fulfillments', 'Avectous &rarr; NetSuite',
+      line('Shipped in Avectous', fmt(fu.total)) +
+      line('Recorded in NetSuite', fmt(fu.matched), 'good') +
+      line('Missing', fmt(fu.missing), fu.missing ? 'bad' : ''),
+      fu.missing ? `<div class="ov-note bad"><strong>${fmt(fu.missing)} shipments never came back into NetSuite.</strong> The customer has the product but the order still reads pending, so it cannot be invoiced.</div>` : ''
+    );
+  }
+
+  // --- Invoicing -----------------------------------------------------------
+  if(iv && !iv.error){
+    html += section('Invoicing', 'Fulfilled &rarr; invoiced',
+      line('Fulfilled orders', fmt(iv.fulfilledOrders)) +
+      line('Invoiced', fmt(iv.invoicedOrders), 'good') +
+      line('Missing invoices', fmt(iv.missing), iv.missing ? 'bad' : '') +
+      line('Invoiced', pct(iv.health)),
+      iv.missing ? `<div class="ov-note bad"><strong>${fmt(iv.missing)} orders shipped but were never invoiced.</strong> That is revenue sitting unbilled. Press <em>Export missing</em> for the list.</div>` : ''
+    );
+
+    // A short by-day tail so yesterday is obvious at a glance.
+    const days = Object.keys(iv.byDay).sort().slice(-10);
+    if(days.length){
+      html += `
+        <div class="ov-card">
+          <h3>Invoicing by the day the order shipped</h3>
+          <div class="ov-sub">The last ${days.length} days. Yesterday is the row that matters.</div>
+          <table class="os-chan-table" style="margin-top:12px;">
+            <thead><tr><th>Day</th><th class="n">Fulfilled</th><th class="n">Invoiced</th><th class="n">Missing</th><th class="n">%</th></tr></thead>
+            <tbody>
+              ${days.map(d=>{
+                const v = iv.byDay[d], miss = v.fulfilled - v.invoiced;
+                const p = v.fulfilled ? (v.invoiced / v.fulfilled) * 100 : 0;
+                return `<tr>
+                  <td>${d}</td>
+                  <td class="n">${fmt(v.fulfilled)}</td>
+                  <td class="n" style="color:var(--green);">${fmt(v.invoiced)}</td>
+                  <td class="n" style="color:${miss ? 'var(--red)' : 'var(--muted)'}; font-weight:${miss ? 700 : 400};">${fmt(miss)}</td>
+                  <td class="n">${p.toFixed(1)}%</td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>`;
+    }
+  }
+
+  el.innerHTML = html;
+}
+
+// Every list of things that went wrong, in one workbook.
+function exportMissing(){
+  if(!current) return;
+  const btn = document.getElementById('exportBtn');
+  const original = btn.innerHTML;
+  btn.disabled = true; btn.textContent = 'Building\u2026';
+  try{
+    const wb = XLSX.utils.book_new();
+    const S = [];
+    const push = function(){ S.push(Array.prototype.slice.call(arguments)); };
+    push('ANGIE \u2014 OVERALL');
+    push('As at', savedAt ? new Date(savedAt).toLocaleString() : new Date().toLocaleString());
+    push();
+    push('', 'Count');
+    if(current.shopify && !current.shopify.error) push('Shopify orders not in NetSuite', current.shopify.missing);
+    if(current.sync)         push('NetSuite orders not in Avectous', current.sync.missing);
+    if(current.fulfillments) push('Avectous shipments not in NetSuite', current.fulfillments.missing);
+    if(current.invoicing)    push('Fulfilled orders never invoiced', current.invoicing.missing);
+    const sum = XLSX.utils.aoa_to_sheet(S);
+    sum['!cols'] = [{wch:42},{wch:12}];
+    XLSX.utils.book_append_sheet(wb, sum, 'Summary');
+
+    const add = (name, headers, rows)=>{
+      if(!rows || !rows.length) return;
+      const sh = XLSX.utils.aoa_to_sheet([headers].concat(rows));
+      sh['!cols'] = headers.map(()=>({wch:22}));
+      sh['!autofilter'] = { ref: XLSX.utils.encode_range({ s:{r:0,c:0}, e:{r:rows.length, c:headers.length-1} }) };
+      XLSX.utils.book_append_sheet(wb, sh, name);
+    };
+    if(current.invoicing) add('Missing invoices', ['Fulfilled on','Order number','Fulfillment'], current.invoicing.rows);
+    if(current.shopify && current.shopify.rows) add('Not in NetSuite', ['Placed on','Shopify order'], current.shopify.rows);
+    if(current.sync) add('Not in Avectous', ['Order number','Internal ID','Order date','Type','NetSuite status','WMS status','WMS export date'], current.sync.rows);
+    if(current.fulfillments) add('Fulfillments missing', ['Order number','Internal ID','Order date','Type','NetSuite status','WMS status'], current.fulfillments.rows);
+
+    const d = new Date(); const pad = n => String(n).padStart(2,'0');
+    XLSX.writeFile(wb, 'BYLT_Overall_' + d.getFullYear() + pad(d.getMonth()+1) + pad(d.getDate()) + '.xlsx');
+  } catch(err){
+    alert('Could not build the export: ' + err.message);
+  } finally {
+    btn.disabled = false; btn.innerHTML = original;
+  }
+}
+document.getElementById('exportBtn').addEventListener('click', exportMissing);
+
+document.getElementById('runBtn').addEventListener('click', async ()=>{
+  const btn = document.getElementById('runBtn'), note = document.getElementById('runNote');
+  btn.disabled = true; note.textContent = 'Working\u2026';
+  const name = document.getElementById('ranBy').value.trim();
+  if(name) rememberName(name);
+
+  let result;
+  try{
+    result = computeOverall(files.so, files.to, files.ship, files.sync, files.shop, files.if, files.inv);
+  } catch(err){
+    note.textContent = 'Could not work that out: ' + err.message;
+    btn.disabled = false; return;
+  }
+
+  saveSectionResult(OVERALL.id, result, name || null);
+  const sync = await syncSectionToShared(OVERALL.id, result, name || null);
+
+  current = result;
+  savedAt = new Date().toISOString();
+  ranBy = name || ranBy;
+  render();
+  document.getElementById('asOf').textContent =
+    `Last updated ${new Date(savedAt).toLocaleString()}${ranBy ? ' by ' + ranBy : ''}`;
+
+  note.innerHTML = sync.ok
+    ? 'Updated \u2014 everyone signing in will see these numbers.'
+    : `<span style="color:var(--red);"><strong>These numbers are on this computer only.</strong> Saving the shared copy failed: ${escapeHtml(sync.error)}.</span>`;
+  btn.disabled = false;
+});
+
+async function init(){
+  const bv = document.getElementById('buildTag');
+  if(bv) bv.textContent = 'build ' + (typeof BUILD === 'undefined' ? '?' : BUILD);
+
+  [['link-so', ORDER_STATUS.so.url], ['link-to', ORDER_STATUS.to.url],
+   ['link-ship', ORDER_STATUS.shipments.url],
+   ['link-if', OVERALL.fulfillments.url], ['link-inv', OVERALL.invoices.url]].forEach(p=>{
+    const el = document.getElementById(p[0]);
+    if(el && p[1]) el.href = p[1];
+  });
+  document.getElementById('ranBy').value = getLastUsedName();
+
+  const shared = await loadSharedResults();
+  if(shared && shared[OVERALL.id]){
+    current = shared[OVERALL.id].result;
+    savedAt = shared[OVERALL.id].savedAt;
+    ranBy   = shared[OVERALL.id].ranBy;
+  } else {
+    const local = loadSectionResult(OVERALL.id);
+    if(local){ current = local.result; savedAt = local.savedAt; ranBy = local.ranBy; }
+  }
+  document.getElementById('asOf').textContent = savedAt
+    ? `Last updated ${new Date(savedAt).toLocaleString()}${ranBy ? ' by ' + ranBy : ''}`
+    : 'Nothing loaded yet';
+  render();
+}
+init();
+</script>
+</body>
+</html>
