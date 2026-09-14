@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>DEV · Angie &ndash; Overall</title>
-<link rel="stylesheet" href="style.css?v=61">
+<link rel="stylesheet" href="style.css?v=62">
 </head>
 <body>
 
@@ -38,9 +38,9 @@
   <div class="panel os-method" id="uploadPanel">
     <div class="os-method-head" onclick="togglePanel()">
       <span>Update these numbers</span>
-      <span class="os-method-toggle" id="panelToggle">Open &#9662;</span>
+      <span class="os-method-toggle" id="panelToggle">Close &#9652;</span>
     </div>
-    <div class="os-method-body" id="panelBody" style="display:none;">
+    <div class="os-method-body" id="panelBody">
       <p style="margin:0 0 14px; font-size:13px; color:var(--muted);">
         Six files. The first three are the same ones Order Status uses &mdash; load them all at the same time,
         or the comparisons between systems will report gaps that are only timing.
@@ -124,13 +124,16 @@
 </main>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="app.js?v=61"></script>
+<script src="app.js?v=62"></script>
 <script>
 let current = null, savedAt = null, ranBy = null;
 const files = { so:null, to:null, ship:null, sync:null, if:null, inv:null, shop:null };
 
+// Starts open. A collapsed panel that won't expand leaves the page looking
+// broken with no way in, so the default is the useful one.
 function togglePanel(){
   const b = document.getElementById('panelBody'), t = document.getElementById('panelToggle');
+  if(!b) return;
   const open = b.style.display !== 'none';
   b.style.display = open ? 'none' : '';
   t.innerHTML = open ? 'Open &#9662;' : 'Close &#9652;';
