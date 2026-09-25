@@ -1,6 +1,6 @@
 // Build 40 — if the dashboard shows a different build number, the browser is
 // serving a cached copy of this file. Hard-refresh, or bump the ?v= in the HTML.
-const BUILD = '63';
+const BUILD = '64';
 
 /* ===========================================================
    FULFILLMENT WIDGET — top-of-dashboard rollup, separate from the
@@ -1339,13 +1339,18 @@ function computeOrderStatusSide(data, cfg, avShipped, avDays){
   const docCol  = guessColumn(data.headers, cfg.docField);
   const dateCol = guessColumn(data.headers, cfg.dateField);
   const chanCol = guessColumn(data.headers, cfg.channelField);
-  const nsShipCol = guessColumn(data.headers, cfg.nsShippedField);
+  // guessColumn matches loosely: asked for "Date Fulfilled" against an export
+  // that has none, it returns plain "Date" — the order date. The in-vs-out
+  // table then counted orders as shipping on the day they were placed, which
+  // put shipments on closed weekends where Avectous had no rows at all.
+  // Both of these must match exactly or not at all.
+  const nsShipCol = data.headers.find(h => norm(h) === 'fulfillmentstatus') || null;
   // Carried through for the open-orders export only. Nothing on this tab
   // filters on them — an order is shipped or it isn't. But an open list is a
   // working list, and knowing a row is Closed changes what you do with it.
   const statusCol = guessColumn(data.headers, cfg.statusField);
   const wmsStatCol = guessColumn(data.headers, cfg.wmsStatusField);
-  const nsDateCol = guessColumn(data.headers, cfg.nsShipDateField);
+  const nsDateCol = data.headers.find(h => norm(h) === 'datefulfilled') || null;
 
   if(!keyCol || !docCol || !dateCol){
     return { error:`Could not find the columns needed. Looked for a key ("${[].concat(cfg.keyField).join('" / "')}"), an order number ("${[].concat(cfg.docField).join('" / "')}") and a date ("${[].concat(cfg.dateField).join('" / "')}"). Columns found: ${data.headers.join(', ')}` };
