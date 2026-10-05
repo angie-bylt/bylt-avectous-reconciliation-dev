@@ -2,21 +2,19 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>DEV · BYLT / Integrations Status &ndash; Orders</title>
+<title>BYLT / Integrations Status &ndash; Orders</title>
 <link rel="stylesheet" href="style.css">
-<script src="auth-check.js?v=64"></script>
+<script src="auth-check.js?v=65"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
 <body>
 
-<div class="dev-ribbon">DEV</div>
 <header class="topbar">
   <div class="brand">BYLT</div>
   <nav>
     <a href="index.html">Order Status</a>
     <a href="integrations.html" class="current">Integrations Status &ndash; Orders</a>
     <a href="integration-health.html">Inventory &amp; Shipping</a>
-    <a href="overall.html">Angie &ndash; Overall</a>
     <a href="load-data.html">Load Data</a>
     <a href="#" id="logoutLink" style="margin-left:24px;">Log out</a>
   </nav>
@@ -43,9 +41,10 @@
     </div>
     <div class="os-toggle-body" id="uploadBody">
       <div class="sub" style="margin:14px 0;">
-        Four files: the two NetSuite searches you already use on Order Status, plus the two
-        Avectous exports. Avectous names both of its files <code>Orders(number).xlsx</code> &mdash;
-        they are different reports, so check you're loading the right one in each box.
+        Four sources: the two NetSuite searches you already use on Order Status, plus two
+        Avectous reports. Box 3 can now pull straight from Avectous instead of an upload.
+        Box 4 is still an upload &mdash; Avectous names both of its files <code>Orders(number).xlsx</code>,
+        so check you're loading the shipment report there.
       </div>
 
       <div class="upload-row">
@@ -71,9 +70,11 @@
         <div class="upload-box">
           <label>3 &middot; Avectous Orders</label>
           <div style="font-size:11.5px; color:var(--muted); margin-bottom:7px;">
-            The order download &mdash; has a <code>Status</code> column
+            The order download &mdash; has a <code>Status</code> column. <strong>Pick all of them at once</strong> if it is split.
           </div>
-          <input type="file" id="file-sync" accept=".csv,.xls,.xlsx">
+          <button class="ghost" id="pullSyncBtn" type="button" style="margin-bottom:8px;">Pull from Avectous</button>
+          <div style="font-size:11px; color:var(--muted); margin-bottom:7px;">Or upload the file instead:</div>
+          <input type="file" id="file-sync" accept=".csv,.xls,.xlsx" multiple>
           <div class="upload-status" id="status-sync">No file loaded</div>
         </div>
         <div class="upload-box">
@@ -144,8 +145,8 @@
   </div>
 </main>
 
-<script src="app.js?v=64"></script>
-<script src="integrations-export.js?v=64"></script>
+<script src="app.js?v=65"></script>
+<script src="integrations-export.js?v=65"></script>
 <script>
 const files = { so:null, to:null, sync:null, ship:null };
 let current = null, savedAt = null, ranBy = null;
@@ -242,9 +243,67 @@ function readFile(file, side, statusEl){
     if(!chosen || !chosen.length) return;
     const statusEl = document.getElementById('status-'+side);
     // Avectous splits shipments by channel now, so box 4 takes several files.
-    if(side === 'ship') readFiles(chosen, side, statusEl);
+    if(side === 'ship' || side === 'sync') readFiles(chosen, side, statusEl);
     else readFile(chosen[0], side, statusEl);
   });
+});
+
+// Box 3: pull the Avectous Orders report through /api/avectous, one page at a
+// time with a pause between pages so Avectous is never flooded. The rows land
+// in files.sync in exactly the shape an uploaded file would, so the comparison
+// logic is unchanged.
+const PULL_PAUSE_MS = 1000;
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+async function fetchAvectousPage(report, pageIndex){
+  for(let attempt = 1; attempt <= 2; attempt++){
+    try{
+      const res = await fetch('/api/avectous', {
+        method:'POST',
+        headers:{'content-type':'application/json'},
+        body: JSON.stringify({ report, pageIndex })
+      });
+      const data = await res.json();
+      if(data.ok) return data;
+      if(attempt === 2) throw new Error(data.error || 'Unknown error');
+    } catch(err){
+      if(attempt === 2) throw err;
+    }
+    await sleep(3000); // one retry after a short wait
+  }
+}
+
+document.getElementById('pullSyncBtn').addEventListener('click', async ()=>{
+  const btn = document.getElementById('pullSyncBtn');
+  const statusEl = document.getElementById('status-sync');
+  btn.disabled = true;
+  statusEl.className = 'upload-status';
+  const rows = [];
+  try{
+    let page = 1, totalPages = 1;
+    do{
+      statusEl.textContent = page === 1 ? 'Connecting to Avectous\u2026' : `Pulling page ${page} of ${totalPages}\u2026`;
+      const data = await fetchAvectousPage('orders', page);
+      totalPages = data.totalPages || page;
+      rows.push(...data.rows);
+      if(!data.hasMore) break;
+      page++;
+      await sleep(PULL_PAUSE_MS);
+    } while(page <= totalPages);
+
+    if(!rows.length) throw new Error('Avectous returned no orders.');
+    const headers = Object.keys(rows[0]);
+    files.sync = [{ headers, rows }];
+    const when = new Date().toLocaleString([], { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' });
+    statusEl.innerHTML = `<strong>Pulled from Avectous</strong> &mdash; ${rows.length.toLocaleString()} orders &middot; ${when}`;
+    statusEl.className = 'upload-status ok';
+  } catch(err){
+    files.sync = null;
+    statusEl.textContent = `Pull stopped: ${err.message}`;
+    statusEl.className = 'upload-status err';
+  }
+  btn.disabled = false;
+  maybeEnable();
 });
 
 function maybeEnable(){

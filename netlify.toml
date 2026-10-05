@@ -4,3 +4,22 @@
 
 [functions]
   node_bundler = "esbuild"
+
+# JS and CSS are version-stamped in the HTML (app.js?v=NN), so a stale copy
+# can't be served after a deploy. This header is the belt to that braces:
+# without it a browser can hold an old app.js for hours and the dashboard
+# silently runs last week's logic.
+[[headers]]
+  for = "/*.js"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+[[headers]]
+  for = "/*.css"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+[[headers]]
+  for = "/*.html"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
