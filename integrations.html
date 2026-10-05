@@ -42,7 +42,7 @@
     <div class="os-toggle-body" id="uploadBody">
       <div class="sub" style="margin:14px 0;">
         Four sources: the two NetSuite searches you already use on Order Status, plus two
-        Avectous reports. Box 3 can now pull straight from Avectous instead of an upload.
+        Avectous reports. Boxes 1&ndash;3 can now pull straight from NetSuite and Avectous instead of an upload.
         Box 4 is still an upload &mdash; Avectous names both of its files <code>Orders(number).xlsx</code>,
         so check you're loading the shipment report there.
       </div>
@@ -51,16 +51,20 @@
         <div class="upload-box">
           <label>1 &middot; Sales Orders (NetSuite)</label>
           <div style="font-size:11.5px; color:var(--muted); margin-bottom:7px;">
-            Search 4866 &middot; <a href="#" id="link-so" target="_blank" rel="noopener" style="color:var(--blue); font-weight:600;">Open &#8599;</a>
+            Search <span id="num-so"></span> &middot; <a href="#" id="link-so" target="_blank" rel="noopener" style="color:var(--blue); font-weight:600;">Open &#8599;</a>
           </div>
+          <button class="ghost" id="pull-so" type="button" style="margin-bottom:8px;">Pull from NetSuite</button>
+          <div style="font-size:11px; color:var(--muted); margin-bottom:7px;">Or upload the file instead:</div>
           <input type="file" id="file-so" accept=".csv,.xls,.xlsx">
           <div class="upload-status" id="status-so">No file loaded</div>
         </div>
         <div class="upload-box">
           <label>2 &middot; Transfer Orders (NetSuite)</label>
           <div style="font-size:11.5px; color:var(--muted); margin-bottom:7px;">
-            Search 4867 &middot; <a href="#" id="link-to" target="_blank" rel="noopener" style="color:var(--blue); font-weight:600;">Open &#8599;</a>
+            Search <span id="num-to"></span> &middot; <a href="#" id="link-to" target="_blank" rel="noopener" style="color:var(--blue); font-weight:600;">Open &#8599;</a>
           </div>
+          <button class="ghost" id="pull-to" type="button" style="margin-bottom:8px;">Pull from NetSuite</button>
+          <div style="font-size:11px; color:var(--muted); margin-bottom:7px;">Or upload the file instead:</div>
           <input type="file" id="file-to" accept=".csv,.xls,.xlsx">
           <div class="upload-status" id="status-to">No file loaded</div>
         </div>
@@ -158,6 +162,8 @@ document.getElementById('exportBtn').addEventListener('click', ()=>{
 });
 document.getElementById('link-so').href = INTEGRATIONS.sources.so.url;
 document.getElementById('link-to').href = INTEGRATIONS.sources.to.url;
+document.getElementById('num-so').textContent = INTEGRATIONS.sources.so.search;
+document.getElementById('num-to').textContent = INTEGRATIONS.sources.to.search;
 document.getElementById('ranBy').value = getLastUsedName();
 document.getElementById('uploadToggle').addEventListener('click', ()=>{
   const open = document.getElementById('uploadBody').classList.toggle('open');
@@ -305,6 +311,73 @@ document.getElementById('pullSyncBtn').addEventListener('click', async ()=>{
   btn.disabled = false;
   maybeEnable();
 });
+
+// Boxes 1 and 2: run the NetSuite saved search through /api/netsuite, a page
+// at a time. Starts at 1,000 rows per page; if NetSuite is too slow and a page
+// times out, it halves the page size and carries on from the same row, so a
+// slow day costs time rather than failing the pull.
+async function fetchNetSuitePage(source, pageIndex, pageSize){
+  const res = await fetch('/api/netsuite', {
+    method:'POST',
+    headers:{'content-type':'application/json'},
+    body: JSON.stringify({ source, pageIndex, pageSize })
+  });
+  let data;
+  try { data = await res.json(); }
+  catch { throw new Error(res.status === 504 || res.status === 502 ? 'TIMEOUT' : `Server error ${res.status}`); }
+  if(!data.ok) throw new Error(data.error || 'Unknown error');
+  return data;
+}
+
+async function pullNetSuite(side){
+  const btn = document.getElementById('pull-'+side);
+  const statusEl = document.getElementById('status-'+side);
+  const keyNames = [].concat(INTEGRATIONS.sources[side].keyField);
+  btn.disabled = true;
+  statusEl.className = 'upload-status';
+  const rows = [];
+  let size = 1000, total = null, failures = 0;
+  try{
+    while(true){
+      const idx = rows.length / size;
+      statusEl.textContent = total === null
+        ? 'Connecting to NetSuite\u2026'
+        : `Pulled ${rows.length.toLocaleString()} of ${total.toLocaleString()} rows\u2026`;
+      let data;
+      try{
+        data = await fetchNetSuitePage(side, idx, size);
+        failures = 0;
+      } catch(err){
+        if(++failures > 3) throw err;
+        if(size > 250 && rows.length % (size / 2) === 0) size = size / 2;
+        await sleep(2000);
+        continue;
+      }
+      total = data.totalResults || 0;
+      rows.push(...data.rows);
+      if(!data.hasMore || !data.rows.length) break;
+      await sleep(300);
+    }
+    if(!rows.length) throw new Error('NetSuite returned no rows for this search.');
+    const headers = Object.keys(rows[0]);
+    const hasKey = keyNames.some(k => headers.some(h => norm(h) === norm(k)));
+    files[side] = { headers, rows };
+    const when = new Date().toLocaleString([], { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' });
+    statusEl.innerHTML = `<strong>Pulled from NetSuite</strong> &mdash; ${rows.length.toLocaleString()} rows &middot; ${when}` +
+      (hasKey ? '' : `<br><span style="color:#b42318;">No "${keyNames.join('" or "')}" column found. Columns: ${headers.join(', ')}</span>`);
+    statusEl.className = hasKey ? 'upload-status ok' : 'upload-status err';
+    if(!hasKey) files[side] = null;
+  } catch(err){
+    files[side] = null;
+    statusEl.textContent = `Pull stopped: ${err.message === 'TIMEOUT' ? 'NetSuite kept timing out. Try again in a few minutes.' : err.message}`;
+    statusEl.className = 'upload-status err';
+  }
+  btn.disabled = false;
+  maybeEnable();
+}
+
+document.getElementById('pull-so').addEventListener('click', ()=> pullNetSuite('so'));
+document.getElementById('pull-to').addEventListener('click', ()=> pullNetSuite('to'));
 
 function maybeEnable(){
   const ready = files.so && files.to && files.sync && files.ship;

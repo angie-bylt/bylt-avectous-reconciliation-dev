@@ -322,3 +322,24 @@ replaces the Avectous Orders upload; the file upload still works as a fallback.
 - Pulled rows use the same column names as the export (`OrderNumber`,
   `Status`, `OrderType`, `Channel`), so the comparison logic is unchanged.
 - Only reports listed in `REPORTS` in the function can be pulled.
+
+
+## Pulling the NetSuite searches through the API
+
+Boxes 1 and 2 have a **Pull from NetSuite** button. The upload still works.
+
+- `netlify/functions/netsuite.mjs` (path `/api/netsuite`) calls Tim's
+  **BYLT Saved Search API** RESTlet (script 2500) through its own deployment,
+  `deploy=2` ("Netlify Dashboard"). Avectous uses `deploy=1`; this never touches it.
+- Auth is NetSuite token-based auth: integration record "Netlify Systems
+  Dashboard", role "Netlify Systems Dashboard Read Only", token owned by Angie.
+- Env vars: `NS_ACCOUNT_ID`, `NS_RESTLET_URL`, `NS_CONSUMER_KEY`,
+  `NS_CONSUMER_SECRET`, `NS_TOKEN_ID`, `NS_TOKEN_SECRET`.
+- Searches: sales orders **4875**, transfer orders **4872** — the same ones the
+  Open links point to. Only these two can be run (`SEARCHES` in the function).
+  The search must include the dashboard role in its audience.
+- Pages of 1,000 rows. If a page times out, the page size halves and the pull
+  continues from the same row.
+- The RESTlet names columns by their saved-search label, so the searches must
+  keep labels like `PO/Check Number`, `Document Number`, `Status`, `WMS Status`
+  and `Date`. If a key column is missing the box says so and lists the columns.
