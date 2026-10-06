@@ -44,7 +44,10 @@ export default async (req) => {
   const pageIndex = Math.max(1, parseInt(body.pageIndex, 10) || 1);
 
   const { requiresOrderDate, ...pageDef } = report;
-  const messageContent = { ...pageDef, PageIndex: pageIndex, PageLimit: PAGE_LIMIT };
+  // Smaller pages answer faster when Avectous is busy; the browser drops the
+  // size if a page fails. Only sizes that divide 1,000 so pages stay aligned.
+  const pageLimit = [1000, 500, 250].includes(parseInt(body.pageLimit, 10)) ? parseInt(body.pageLimit, 10) : PAGE_LIMIT;
+  const messageContent = { ...pageDef, PageIndex: pageIndex, PageLimit: pageLimit };
   if (requiresOrderDate) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(body.orderDate || '')) {
       return json(400, { ok: false, error: 'This report needs an orderDate (YYYY-MM-DD).' });

@@ -357,3 +357,10 @@ Boxes 1 and 2 have a **Pull from NetSuite** button. The upload still works.
 - A day that fails twice stops the pull instead of being skipped, so a missing
   day can never make shipped orders look unshipped.
 - `ShipDate` was added to the ship-date column names the screen recognises.
+
+### Box 3 resilience (Oct 6)
+Avectous sometimes answers slowly mid-pull (once a 400 "API Error", once a
+Netlify timeout). Box 3 now retries each page up to 5 times with growing waits,
+drops the page size 1,000 -> 500 -> 250 when pages fail, and keeps what it has
+pulled: if it still stops, the button becomes **Resume pull** and continues
+from the same row.

@@ -263,52 +263,70 @@ function readFile(file, side, statusEl){
 const PULL_PAUSE_MS = 1000;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-async function fetchAvectousPage(report, pageIndex){
-  for(let attempt = 1; attempt <= 2; attempt++){
-    try{
-      const res = await fetch('/api/avectous', {
-        method:'POST',
-        headers:{'content-type':'application/json'},
-        body: JSON.stringify({ report, pageIndex })
-      });
-      const data = await res.json();
-      if(data.ok) return data;
-      if(attempt === 2) throw new Error(data.error || 'Unknown error');
-    } catch(err){
-      if(attempt === 2) throw err;
-    }
-    await sleep(3000); // one retry after a short wait
-  }
+// One page of an Avectous report. A non-JSON reply means Netlify cut the
+// request off (Avectous took too long), so it's reported as a timeout.
+async function fetchAvectousPage(report, pageIndex, pageLimit){
+  const res = await fetch('/api/avectous', {
+    method:'POST',
+    headers:{'content-type':'application/json'},
+    body: JSON.stringify({ report, pageIndex, pageLimit })
+  });
+  let data;
+  try { data = await res.json(); }
+  catch { throw new Error('Avectous took too long to answer'); }
+  if(!data.ok) throw new Error(data.error || 'Unknown error');
+  return data;
 }
+
+// Box 3 keeps what it has pulled so far. If a pull stops, the button turns
+// into "Resume pull" and carries on from the same row instead of starting
+// over. Each page gets up to 5 tries with growing waits, and the page size
+// drops (1,000 -> 500 -> 250) when Avectous is struggling.
+const syncPull = { rows: [], size: 1000, total: null };
 
 document.getElementById('pullSyncBtn').addEventListener('click', async ()=>{
   const btn = document.getElementById('pullSyncBtn');
   const statusEl = document.getElementById('status-sync');
   btn.disabled = true;
   statusEl.className = 'upload-status';
-  const rows = [];
+  const st = syncPull;
   try{
-    let page = 1, totalPages = 1;
-    do{
-      statusEl.textContent = page === 1 ? 'Connecting to Avectous\u2026' : `Pulling page ${page} of ${totalPages}\u2026`;
-      const data = await fetchAvectousPage('orders', page);
-      totalPages = data.totalPages || page;
-      rows.push(...data.rows);
-      if(!data.hasMore) break;
-      page++;
+    while(true){
+      // PageIndex is 1-based; rows so far is always a multiple of the size.
+      const page = st.rows.length / st.size + 1;
+      statusEl.textContent = st.total === null
+        ? 'Connecting to Avectous\u2026'
+        : `Pulled ${st.rows.length.toLocaleString()} of ${st.total.toLocaleString()} orders\u2026`;
+      let data, lastErr;
+      for(let attempt = 1; attempt <= 5; attempt++){
+        try { data = await fetchAvectousPage('orders', page, st.size); break; }
+        catch(err){
+          lastErr = err;
+          if(st.size > 250 && st.rows.length % (st.size / 2) === 0) st.size = st.size / 2;
+          statusEl.textContent = `Avectous is slow \u2014 retrying (${attempt} of 5)\u2026`;
+          await sleep(3000 * attempt);
+        }
+      }
+      if(!data) throw lastErr;
+      st.total = data.totalLines || st.total;
+      st.rows.push(...data.rows);
+      if(!data.hasMore || !data.rows.length) break;
       await sleep(PULL_PAUSE_MS);
-    } while(page <= totalPages);
-
-    if(!rows.length) throw new Error('Avectous returned no orders.');
-    const headers = Object.keys(rows[0]);
-    files.sync = [{ headers, rows }];
+    }
+    if(!st.rows.length) throw new Error('Avectous returned no orders.');
+    const headers = Object.keys(st.rows[0]);
+    files.sync = [{ headers, rows: st.rows }];
     const when = new Date().toLocaleString([], { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' });
-    statusEl.innerHTML = `<strong>Pulled from Avectous</strong> &mdash; ${rows.length.toLocaleString()} orders &middot; ${when}`;
+    statusEl.innerHTML = `<strong>Pulled from Avectous</strong> &mdash; ${st.rows.length.toLocaleString()} orders &middot; ${when}`;
     statusEl.className = 'upload-status ok';
+    // Next click starts a fresh pull.
+    syncPull.rows = []; syncPull.size = 1000; syncPull.total = null;
+    btn.textContent = 'Pull from Avectous';
   } catch(err){
     files.sync = null;
-    statusEl.textContent = `Pull stopped: ${err.message}`;
+    statusEl.textContent = `Pull stopped at ${st.rows.length.toLocaleString()} orders: ${err.message}. Click Resume pull to carry on.`;
     statusEl.className = 'upload-status err';
+    btn.textContent = 'Resume pull';
   }
   btn.disabled = false;
   maybeEnable();
