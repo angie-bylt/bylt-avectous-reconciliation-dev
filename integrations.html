@@ -349,6 +349,28 @@ async function fetchNetSuitePage(source, pageIndex, pageSize){
   return data;
 }
 
+// Make API rows look like the exported file, so the comparison reads them the
+// same way. Checkboxes come back as true/false (the file says Yes/No), and
+// timestamps come back as text like "10/6/2026 11:45 am" (the file gives real
+// dates). Without this, "Date Created" was unreadable and every order created
+// today was excused as "created in the last hour", and hold flags never matched.
+const NS_DATETIME = /^(\d{1,2})\/(\d{1,2})\/(\d{4})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(am|pm)?$/i;
+function normalizeNetSuiteRow(row){
+  for(const k in row){
+    const v = row[k];
+    if(v === true){ row[k] = 'Yes'; continue; }
+    if(v === false){ row[k] = 'No'; continue; }
+    if(typeof v !== 'string') continue;
+    const m = v.trim().match(NS_DATETIME);
+    if(!m) continue;
+    let h = parseInt(m[4], 10);
+    const ap = (m[7] || '').toLowerCase();
+    if(ap === 'pm' && h < 12) h += 12;
+    if(ap === 'am' && h === 12) h = 0;
+    row[k] = new Date(+m[3], +m[1] - 1, +m[2], h, +m[5], +(m[6] || 0));
+  }
+}
+
 async function pullNetSuite(side){
   const btn = document.getElementById('pull-'+side);
   const statusEl = document.getElementById('status-'+side);
@@ -379,6 +401,7 @@ async function pullNetSuite(side){
       await sleep(300);
     }
     if(!rows.length) throw new Error('NetSuite returned no rows for this search.');
+    rows.forEach(normalizeNetSuiteRow);
     const headers = Object.keys(rows[0]);
     const hasKey = keyNames.some(k => headers.some(h => norm(h) === norm(k)));
     files[side] = { headers, rows };
@@ -428,7 +451,10 @@ document.getElementById('pullShipBtn').addEventListener('click', async ()=>{
   btn.disabled = true;
   statusEl.className = 'upload-status';
   const days = [];
-  for(let d = new Date(ORDER_STATUS.startDate + 'T12:00:00'); isoDayLocal(d) <= isoToday(); d.setDate(d.getDate() + 1)){
+  // Starts well before go-live: transfer orders dated in July shipped from the
+  // DC after it opened, and the uploaded report includes them.
+  const SHIP_PULL_FROM = '2026-07-01';
+  for(let d = new Date(SHIP_PULL_FROM + 'T12:00:00'); isoDayLocal(d) <= isoToday(); d.setDate(d.getDate() + 1)){
     days.push(isoDayLocal(d));
   }
   const rows = [];
@@ -486,9 +512,22 @@ document.getElementById('runBtn').addEventListener('click', async ()=>{
     return;
   }
   const sync = await syncSectionToShared(INTEGRATIONS.id, result, name || null);
-  note.textContent = sync.ok
+
+  // Order Status runs on the same NetSuite searches and Avectous shipments
+  // (boxes 1, 2 and 4), so one set of pulls updates both tabs.
+  let osNote = '';
+  const os = computeOrderStatus(files.so, files.to, files.ship);
+  const osErr = (os.so && os.so.error) || (os.to && os.to.error) || (os.shipmentsFile && os.shipmentsFile.error);
+  if(osErr){
+    osNote = ` Order Status was not updated: ${osErr}`;
+  } else {
+    const osSync = await syncSectionToShared(ORDER_STATUS.id, os, name || null);
+    osNote = osSync.ok ? ' Order Status updated too.' : ` Order Status could not be saved: ${osSync.error}`;
+  }
+
+  note.textContent = (sync.ok
     ? 'Updated — everyone signing in will see these numbers.'
-    : `Saved on this computer, but the shared copy failed: ${sync.error}`;
+    : `Saved on this computer, but the shared copy failed: ${sync.error}`) + osNote;
   btn.disabled = false;
   init();
 });

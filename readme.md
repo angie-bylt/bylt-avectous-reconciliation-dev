@@ -364,3 +364,20 @@ Netlify timeout). Box 3 now retries each page up to 5 times with growing waits,
 drops the page size 1,000 -> 500 -> 250 when pages fail, and keeps what it has
 pulled: if it still stops, the button becomes **Resume pull** and continues
 from the same row.
+
+### One pull updates both tabs
+Order Status uses the same three sources as Integrations boxes 1, 2 and 4.
+Update Dashboard on Integrations Status – Orders now also recalculates and
+saves Order Status. The Order Status tab's own uploads still work.
+
+### Matching the API data to the export (Oct 6 comparison vs live)
+First side-by-side run (API on Dev vs Liz's uploads on live) matched closely
+except for three gaps, now fixed:
+- **"Created in the last hour" showed 200 vs 0.** The RESTlet returns Date
+  Created as text ("10/6/2026 11:45 am"); the comparison only reads real dates,
+  so it fell back to excusing every order created today. NetSuite rows are now
+  converted on pull: timestamps to dates, checkboxes true/false to Yes/No.
+- **"Held, but in Avectous anyway" was missing** — same cause (checkbox values).
+- **Shipped in Avectous was ~40 lower.** The shipments pull started at go-live
+  (Aug 6) by order date, but transfer orders dated in July shipped after
+  go-live. It now starts at 2026-07-01.
