@@ -343,3 +343,17 @@ Boxes 1 and 2 have a **Pull from NetSuite** button. The upload still works.
 - The RESTlet names columns by their saved-search label, so the searches must
   keep labels like `PO/Check Number`, `Document Number`, `Status`, `WMS Status`
   and `Date`. If a key column is missing the box says so and lists the columns.
+
+
+## Pulling Avectous shipments through the API (box 4)
+
+- Report: **Shipments by Order/Tracking**, PageId 11900, PanelName the same.
+  One row per package, with OrderNumber, ShipDate and TrackingNo.
+- Unfiltered it takes over 30 seconds even for 10 rows, so it is always pulled
+  one **order date** at a time, from go-live (`ORDER_STATUS.startDate`) to today.
+- The date filter must be written exactly as Avectous's screen shows it:
+  `"Parameters": { "OrderDate": "2026-10-06 00:00:00" }`. Plain `2026-10-06`
+  times out on this report, and filtering on ShipDate needs an exact timestamp.
+- A day that fails twice stops the pull instead of being skipped, so a missing
+  day can never make shipped orders look unshipped.
+- `ShipDate` was added to the ship-date column names the screen recognises.

@@ -11,7 +11,11 @@ const ENDPOINT = 'https://bylt.avectous.com/API/MessageGateway/v1/MessageGateway
 // Only these reports can be pulled. PanelName is required by Avectous even
 // though their doc doesn't mention it.
 const REPORTS = {
-  orders: { PageId: 6, PageName: 'Orders', PanelName: 'Orders' }
+  orders: { PageId: 6, PageName: 'Orders', PanelName: 'Orders' },
+  // Slow unless filtered, so it is always asked for one order date at a time.
+  // The date must be written exactly as Avectous's screen shows it.
+  shipments: { PageId: 11900, PageName: 'Shipments by Order/Tracking', PanelName: 'Shipments by Order/Tracking',
+               requiresOrderDate: true }
 };
 
 const PAGE_LIMIT = 1000;
@@ -39,6 +43,15 @@ export default async (req) => {
   if (!report) return json(400, { ok: false, error: `Unknown report: ${body.report}` });
   const pageIndex = Math.max(1, parseInt(body.pageIndex, 10) || 1);
 
+  const { requiresOrderDate, ...pageDef } = report;
+  const messageContent = { ...pageDef, PageIndex: pageIndex, PageLimit: PAGE_LIMIT };
+  if (requiresOrderDate) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(body.orderDate || '')) {
+      return json(400, { ok: false, error: 'This report needs an orderDate (YYYY-MM-DD).' });
+    }
+    messageContent.Parameters = { OrderDate: `${body.orderDate} 00:00:00` };
+  }
+
   let res, text;
   try {
     res = await fetch(ENDPOINT, {
@@ -48,7 +61,7 @@ export default async (req) => {
         companyCode: 'Bylt',
         warehouseCode: '810',
         messageType: 'RequestPageId',
-        messageContent: { ...report, PageIndex: pageIndex, PageLimit: PAGE_LIMIT }
+        messageContent
       })
     });
     text = await res.text();

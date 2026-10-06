@@ -1278,7 +1278,7 @@ const ORDER_STATUS = {
     label:'Avectous Shipment Details',
     url:'https://bylt.avectous.com/portal/frameworkpage/62c9bee6-310c-46bf-4c3b-08deafb23cf9/7cb9984b-6345-45c5-b795-9aa14a6548ad/ddc9cab9-825a-467e-9323-5816ef1c577e',
     keyField:['OrderNumber'],
-    dateField:['RecordDate','LastShipDate']
+    dateField:['RecordDate','LastShipDate','ShipDate']
   }
 };
 
@@ -1758,7 +1758,7 @@ const INTEGRATIONS = {
     sync:{ label:'Avectous Orders', hint:'Orders(...).xlsx — the order download',
            keyField:['OrderNumber'] },
     ship:{ label:'Avectous Shipment Details', hint:'the line-level report with a RecordDate column',
-           keyField:['OrderNumber'], dateField:['RecordDate','LastShipDate'] }
+           keyField:['OrderNumber'], dateField:['RecordDate','LastShipDate','ShipDate'] }
   }
 };
 
