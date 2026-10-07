@@ -91,8 +91,14 @@ export default async (req) => {
   }
 
   const page = Array.isArray(inner) ? inner[0] : inner;
-  if (!page || !Array.isArray(page.MessageContent)) {
-    return json(502, { ok: false, error: 'Avectous response had no rows section.' });
+  if (!page) {
+    return json(502, { ok: false, error: 'Avectous response was empty.' });
+  }
+  // A filter that matches nothing (e.g. a day with no shipments) comes back
+  // with TotalLines 0 and no MessageContent at all. That's an empty page, not an error.
+  if (!Array.isArray(page.MessageContent)) {
+    if (Number(page.TotalLines) === 0 || Number(page.ReturnedLines) === 0) page.MessageContent = [];
+    else return json(502, { ok: false, error: 'Avectous response had no rows section.' });
   }
 
   return json(200, {

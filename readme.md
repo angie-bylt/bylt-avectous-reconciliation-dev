@@ -381,3 +381,5 @@ except for three gaps, now fixed:
 - **Shipped in Avectous was ~40 lower.** The shipments pull started at go-live
   (Aug 6) by order date, but transfer orders dated in July shipped after
   go-live. It now starts at 2026-07-01.
+- A day with no shipments comes back from Avectous with TotalLines 0 and no
+  MessageContent at all; the function now treats that as an empty page.
