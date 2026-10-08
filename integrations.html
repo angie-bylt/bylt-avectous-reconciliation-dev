@@ -34,6 +34,22 @@
 <main>
   <div id="results"></div>
 
+  <div class="panel" id="autoPanel" style="padding:14px 22px;">
+    <div style="display:flex; flex-wrap:wrap; align-items:center; gap:10px; justify-content:space-between;">
+      <div>
+        <div style="font-weight:700;">Automatic refresh <span id="autoBadge" style="font-size:11.5px; font-weight:700; padding:2px 8px; border-radius:10px; margin-left:6px;"></span></div>
+        <div class="sub" id="autoLine" style="margin:4px 0 0;">Checking&hellip;</div>
+      </div>
+      <div style="display:flex; gap:8px;">
+        <button class="ghost" id="autoNowBtn" type="button">Refresh now</button>
+        <button class="ghost" id="autoToggleBtn" type="button">Start</button>
+      </div>
+    </div>
+    <div id="autoNew" style="display:none; margin-top:8px; font-size:12.5px;">
+      New numbers were saved. <a href="#" id="autoReload">Load them</a>
+    </div>
+  </div>
+
   <div class="os-toggle-panel">
     <div class="os-toggle-head" id="uploadToggle">
       <span class="tt">Update these numbers</span>
@@ -151,7 +167,7 @@
   </div>
 </main>
 
-<script src="app.js?v=66"></script>
+<script src="app.js?v=67"></script>
 <script src="integrations-export.js?v=65"></script>
 <script>
 const files = { so:null, to:null, sync:null, ship:null };
@@ -426,60 +442,77 @@ document.getElementById('pull-to').addEventListener('click', ()=> pullNetSuite('
 // takes over 30 seconds, so it's pulled one order date at a time from go-live
 // to today. A day that fails twice stops the pull rather than being skipped,
 // because a silently missing day would make shipped orders look unshipped.
-async function fetchShipDay(day, pageIndex){
-  for(let attempt = 1; attempt <= 2; attempt++){
-    try{
-      const res = await fetch('/api/avectous', {
-        method:'POST',
-        headers:{'content-type':'application/json'},
-        body: JSON.stringify({ report:'shipments', orderDate: day, pageIndex })
-      });
-      let data;
-      try { data = await res.json(); } catch { throw new Error(`Server error ${res.status} (timed out?)`); }
-      if(data.ok) return data;
-      throw new Error(data.error || 'Unknown error');
-    } catch(err){
-      if(attempt === 2) throw new Error(`${day}: ${err.message}`);
-      await sleep(3000);
-    }
-  }
+// One page of one order date. A non-JSON reply (e.g. Netlify's 504 page) means
+// Avectous took longer than Netlify allows for a single request.
+async function fetchShipDay(day, pageIndex, pageLimit){
+  const res = await fetch('/api/avectous', {
+    method:'POST',
+    headers:{'content-type':'application/json'},
+    body: JSON.stringify({ report:'shipments', orderDate: day, pageIndex, pageLimit })
+  });
+  let data;
+  try { data = await res.json(); }
+  catch { throw new Error(`Avectous took too long to answer (${res.status})`); }
+  if(!data.ok) throw new Error(data.error || 'Unknown error');
+  return data;
 }
+
+// Box 4 keeps what it has pulled. Each page gets up to 5 tries with growing
+// waits, and the page size drops (1,000 -> 500 -> 250) when a busy day is too
+// slow to answer. If it still stops, the button becomes "Resume pull" and
+// carries on from the same day and row instead of starting over.
+const shipPull = { days: null, d: 0, page: 1, size: 1000, rows: [] };
 
 document.getElementById('pullShipBtn').addEventListener('click', async ()=>{
   const btn = document.getElementById('pullShipBtn');
   const statusEl = document.getElementById('status-ship');
   btn.disabled = true;
   statusEl.className = 'upload-status';
-  const days = [];
-  // Starts well before go-live: transfer orders dated in July shipped from the
-  // DC after it opened, and the uploaded report includes them.
-  const SHIP_PULL_FROM = '2026-07-01';
-  for(let d = new Date(SHIP_PULL_FROM + 'T12:00:00'); isoDayLocal(d) <= isoToday(); d.setDate(d.getDate() + 1)){
-    days.push(isoDayLocal(d));
-  }
-  const rows = [];
-  try{
-    for(let i = 0; i < days.length; i++){
-      let page = 1;
-      while(true){
-        statusEl.textContent = `Pulling order date ${days[i]} (${i + 1} of ${days.length})\u2026 ${rows.length.toLocaleString()} shipments so far`;
-        const data = await fetchShipDay(days[i], page);
-        rows.push(...data.rows);
-        await sleep(500);
-        if(!data.hasMore) break;
-        page++;
-      }
+  const st = shipPull;
+  if(!st.days){
+    // Starts well before go-live: transfer orders dated in July shipped from the
+    // DC after it opened, and the uploaded report includes them.
+    const SHIP_PULL_FROM = '2026-07-01';
+    st.days = [];
+    for(let d = new Date(SHIP_PULL_FROM + 'T12:00:00'); isoDayLocal(d) <= isoToday(); d.setDate(d.getDate() + 1)){
+      st.days.push(isoDayLocal(d));
     }
-    if(!rows.length) throw new Error('Avectous returned no shipments.');
-    const headers = Object.keys(rows[0]);
-    files.ship = [{ headers, rows }];
+  }
+  try{
+    while(st.d < st.days.length){
+      const day = st.days[st.d];
+      statusEl.textContent = `Pulling order date ${day} (${st.d + 1} of ${st.days.length})\u2026 ${st.rows.length.toLocaleString()} shipments so far`;
+      let data, lastErr;
+      for(let attempt = 1; attempt <= 5; attempt++){
+        try { data = await fetchShipDay(day, st.page, st.size); break; }
+        catch(err){
+          lastErr = err;
+          // Halve the page size, keeping the same starting row.
+          const offset = (st.page - 1) * st.size;
+          if(st.size > 250 && offset % (st.size / 2) === 0){ st.size = st.size / 2; st.page = offset / st.size + 1; }
+          statusEl.textContent = `Avectous is slow on ${day} \u2014 retrying (${attempt} of 5)\u2026`;
+          await sleep(3000 * attempt);
+        }
+      }
+      if(!data) throw new Error(`${day}: ${lastErr.message}`);
+      st.rows.push(...data.rows);
+      await sleep(500);
+      if(data.hasMore && data.rows.length){ st.page++; continue; }
+      st.d++; st.page = 1; st.size = 1000;
+    }
+    if(!st.rows.length) throw new Error('Avectous returned no shipments.');
+    const headers = Object.keys(st.rows[0]);
+    files.ship = [{ headers, rows: st.rows }];
     const when = new Date().toLocaleString([], { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' });
-    statusEl.innerHTML = `<strong>Pulled from Avectous</strong> &mdash; ${rows.length.toLocaleString()} shipments &middot; ${when}`;
+    statusEl.innerHTML = `<strong>Pulled from Avectous</strong> &mdash; ${st.rows.length.toLocaleString()} shipments &middot; ${when}`;
     statusEl.className = 'upload-status ok';
+    shipPull.days = null; shipPull.d = 0; shipPull.page = 1; shipPull.size = 1000; shipPull.rows = [];
+    btn.textContent = 'Pull from Avectous';
   } catch(err){
     files.ship = null;
-    statusEl.textContent = `Pull stopped at ${err.message}`;
+    statusEl.textContent = `Pull stopped at ${err.message}. Click Resume pull to carry on from there.`;
     statusEl.className = 'upload-status err';
+    btn.textContent = 'Resume pull';
   }
   btn.disabled = false;
   maybeEnable();
@@ -489,6 +522,60 @@ function isoDayLocal(d){
   const pad = n => String(n).padStart(2,'0');
   return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
 }
+
+// ---------- Automatic refresh status (see netlify/functions/lib/refresh-engine.mjs) ----------
+let autoState = null, autoSeenSuccess = null;
+const fmtWhen = iso => iso ? new Date(iso).toLocaleString([], { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }) : '';
+
+function renderAuto(){
+  const s = autoState; if(!s) return;
+  const badge = document.getElementById('autoBadge');
+  const line = document.getElementById('autoLine');
+  const toggle = document.getElementById('autoToggleBtn');
+  let text, color, bg;
+  if(s.status === 'running'){ text = 'Running'; color = '#1d4ed8'; bg = '#e0e7ff'; }
+  else if(s.paused){ text = 'Off'; color = '#6b7684'; bg = '#eef1f4'; }
+  else { text = 'On'; color = '#1a7f37'; bg = '#dcfce7'; }
+  badge.textContent = text; badge.style.color = color; badge.style.background = bg;
+  toggle.textContent = s.paused ? 'Start' : 'Pause';
+  const parts = [];
+  if(s.status === 'running'){
+    parts.push(`${s.mode === 'full' ? 'Full' : 'Quick'} refresh, step ${s.step} of ${s.steps}${s.progress ? ' \u2014 ' + s.progress : ''}.`);
+    if(s.mode === 'full' && !s.lastSuccessAt) parts.push('The first run builds the saved copy and takes a few hours.');
+  } else if(s.requested){
+    parts.push('Starting within a minute\u2026');
+  } else if(s.paused){
+    parts.push('Off. Use the pull buttons below, or press Start to refresh automatically every hour.');
+  } else {
+    parts.push('Refreshes every hour.');
+  }
+  if(s.lastSuccessAt) parts.push(`Last finished ${fmtWhen(s.lastSuccessAt)}.`);
+  if(s.lastError && s.status === 'running') parts.push(`Retrying after: ${s.lastError.replace(/^\S+ /,'')}`);
+  if(s.lastCycle && s.lastCycle.ok === false) parts.push(`Last attempt stopped: ${s.lastCycle.error}`);
+  line.textContent = parts.join(' ');
+  if(autoSeenSuccess && s.lastSuccessAt && s.lastSuccessAt !== autoSeenSuccess){
+    document.getElementById('autoNew').style.display = 'block';
+  }
+  if(!autoSeenSuccess) autoSeenSuccess = s.lastSuccessAt || 'none';
+}
+
+async function loadAuto(action){
+  try{
+    const res = await fetch('/api/refresh', action ? {
+      method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ action })
+    } : undefined);
+    const data = await res.json();
+    if(!data.ok) throw new Error(data.error || 'error');
+    autoState = data; renderAuto();
+  } catch(err){
+    document.getElementById('autoLine').textContent = `Couldn't read the automatic refresh status: ${err.message}`;
+  }
+}
+document.getElementById('autoToggleBtn').addEventListener('click', ()=> loadAuto(autoState && !autoState.paused ? 'pause' : 'start'));
+document.getElementById('autoNowBtn').addEventListener('click', ()=> loadAuto('now'));
+document.getElementById('autoReload').addEventListener('click', e=>{ e.preventDefault(); location.reload(); });
+loadAuto();
+setInterval(()=> loadAuto(), 20000);
 
 function maybeEnable(){
   const ready = files.so && files.to && files.sync && files.ship;

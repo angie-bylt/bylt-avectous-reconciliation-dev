@@ -4,6 +4,8 @@
 
 [functions]
   node_bundler = "esbuild"
+  # The automatic refresh runs the dashboard's own app.js on the server.
+  included_files = ["app.js"]
 
 # JS and CSS are version-stamped in the HTML (app.js?v=NN), so a stale copy
 # can't be served after a deploy. This header is the belt to that braces:

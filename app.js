@@ -2006,7 +2006,7 @@ function computeIntegrations(soData, toData, syncData, shipData){
                 : o.paymentHold ? 'Payment terms hold'
                 : 'On backorder hold';
       excludedBy[why] = (excludedBy[why] || 0) + 1;
-      excludedRows.push([o.key, o.id, o.orderDay || '', o.type, o.status, o.wms, why]);
+      excludedRows.push([o.key, o.id, o.orderDay || '', o.type, o.status, o.wms, fmtStamp(o.exportedAt), why]);
     });
 
     missing.sort((a,b)=> String(a[2]).localeCompare(String(b[2])));
@@ -2031,7 +2031,7 @@ function computeIntegrations(soData, toData, syncData, shipData){
     nsSide.byKey.forEach(o=>{
       if((o.withheld || o.paymentHold) && av.sync.byKey.has(o.key)){
         heldButSent++;
-        heldButSentRows.push([o.key, o.id, o.orderDay || '', o.type, o.status, o.wms,
+        heldButSentRows.push([o.key, o.id, o.orderDay || '', o.type, o.status, o.wms, fmtStamp(o.exportedAt),
                               o.withheld ? 'Withheld from WMS' : 'Payment terms hold']);
       }
     });

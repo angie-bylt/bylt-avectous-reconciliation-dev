@@ -383,3 +383,67 @@ except for three gaps, now fixed:
   go-live. It now starts at 2026-07-01.
 - A day with no shipments comes back from Avectous with TotalLines 0 and no
   MessageContent at all; the function now treats that as an empty page.
+
+### Held-but-in-Avectous check (Oct 6)
+Dev (API) showed 43, live (uploads) 22. The export's list has exactly 22
+Shopify B2B "Payment terms hold" orders plus 21 "Withheld from WMS" orders
+(20 wholesale POs dated Mar–May, Closed in NetSuite; one Shopify order; one
+TO). The uploaded files' Withhold checkbox isn't being read as Yes, so live has
+been missing the withheld ones; the API reads it correctly.
+Also fixed: the "SO Sync Excluded" and "Held But In Avectous" export sheets were
+missing the WMS Export Date value, so the reason landed under the wrong header.
+
+
+## Automatic refresh (server version)
+
+Moves the four pulls and the recalculation off the browser and onto Netlify,
+so Order Status and Integrations Status keep themselves current.
+
+**How it runs.** `refresh-tick.mjs` runs every minute (Netlify scheduled
+function, 30-second limit). Each run does ~20 seconds of work, saves its place
+in Netlify Blobs (store `bylt-refresh`), and stops; the next run carries on.
+It only ever sends one request at a time to NetSuite or Avectous. Logic is in
+`lib/refresh-engine.mjs`; request helpers in `lib/clients.mjs`.
+
+**Steps in each refresh:** NetSuite 4875 → NetSuite 4872 → Avectous Orders →
+Avectous Shipments (one order date at a time) → check orders that left an open
+status → recalculate both tabs and save them (shown as "by Auto-refresh").
+
+**First run vs later runs.** The first refresh pulls everything and saves a copy
+(a few hours, spread over many one-minute runs). After that, every hour it only
+fetches what changed:
+- NetSuite: orders with `lastmodifieddate` on or after the day before the last
+  refresh (passed through the RESTlet's `filters`). If NetSuite rejects the
+  filter, that search is pulled in full instead.
+- Avectous orders: every order in an open status (one query per status) plus
+  orders dated today and yesterday. If Avectous ignores the Status filter, the
+  Orders report is pulled in full instead.
+- Avectous shipments: today, yesterday, and the order dates of orders that were
+  open last time and aren't now.
+- Orders that left an open status: marked Shipped if a shipment exists, else
+  looked up one by one (capped at 120 per refresh).
+A full pull runs again weekly as a safety net.
+
+**Same results as the browser.** The recalculation runs the dashboard's own
+`app.js` on the server (`lib/compute.mjs`, shipped via `included_files`), with
+the same NetSuite clean-up the pull buttons do (checkboxes → Yes/No, timestamps →
+dates), in Pacific time.
+
+**What's stored.** Saved copies keep only the columns the dashboard uses. Avectous
+customer names/addresses/emails are dropped; NetSuite columns are kept only if
+the comparison code could look them up.
+
+**Controls** (Integrations Status – Orders page, and `/api/refresh`): Start,
+Pause, Refresh now. It starts **paused** after a deploy until someone presses
+Start. The manual pull buttons still work as a fallback.
+
+**Limits.** A step that errors is retried the next minute; after 6 errors in a
+row the refresh is abandoned and the next one starts on schedule. Status,
+progress, and the last 40 events are visible on the page and at `/api/refresh`.
+
+### Box 4 resilience (Oct 8)
+A busy order date (e.g. 2026-08-10) made Avectous take longer than Netlify's
+per-request limit, so the shipments pull stopped with a 504. Box 4 now works
+like box 3: up to 5 tries per page with growing waits, page size drops
+1,000 -> 500 -> 250 on a slow day, and **Resume pull** continues from the same
+day and row.
