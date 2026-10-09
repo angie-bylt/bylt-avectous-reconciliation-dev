@@ -42,7 +42,7 @@ function load() {
   ctx.window = ctx;
   ctx.globalThis = ctx;
   vm.createContext(ctx);
-  vm.runInContext(code + '\n;globalThis.__api = { computeIntegrations, computeOrderStatus, stripLedgers, INTEGRATIONS, ORDER_STATUS, norm };', ctx);
+  vm.runInContext(code + '\n;globalThis.__api = { computeIntegrations, computeOrderStatus, stripLedgers, INTEGRATIONS, ORDER_STATUS, norm, summarizeInterfaceRecords, applySyncReasons, syncMissingOrders };', ctx);
 
   // Every quoted name in app.js, normalised. A NetSuite column is kept only if
   // the comparison could look it up by one of these names (same matching rules
@@ -117,3 +117,8 @@ export function computeAll({ nsSo, nsTo, avo, shp }) {
     orderStatusError: (orderStatus.so && orderStatus.so.error) || (orderStatus.to && orderStatus.to.error) || null
   };
 }
+
+// Why-missing helpers, shared with the browser (defined in app.js).
+export function missingOrders(result) { return load().api.syncMissingOrders(result); }
+export function summarizeReason(records, exported) { return load().api.summarizeInterfaceRecords(records, exported); }
+export function applyReasons(result, reasons) { return load().api.applySyncReasons(result, reasons); }

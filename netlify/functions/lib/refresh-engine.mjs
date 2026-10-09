@@ -11,7 +11,8 @@
 //   3. Avectous orders           (report 6)
 //   4. Avectous shipments        (report 11900, one order date at a time)
 //   5. Check orders that left an open status
-//   6. Recalculate Order Status and Integrations Status and save them
+//   6. Recalculate Order Status and Integrations Status
+//   7. Ask Avectous why any never-arrived orders are missing, then save Integrations
 //
 // The first cycle pulls everything (a few hours, spread over many runs) and
 // keeps a saved copy. After that each cycle only fetches what changed:
@@ -51,7 +52,12 @@ async function readTable(store, name) {
   if (!man) return null;
   const parts = await Promise.all(man.chunks.map(k => store.get(k, { type: 'json' })));
   const rows = [];
-  for (const p of parts) if (p) rows.push(...p);
+  for (const p of parts) {
+    // A missing piece means the saved copy can't be trusted; never use part of it.
+    if (!p) throw new Error(`Saved copy "${name}" is incomplete`);
+    rows.push(...p);
+  }
+  if (man.count != null && rows.length !== man.count) throw new Error(`Saved copy "${name}" is incomplete`);
   return { headers: man.headers, rows, savedAt: man.savedAt };
 }
 
@@ -132,7 +138,8 @@ function buildCycle(st, now, haveSnapshots, forceFull) {
       { kind: 'avo', incremental: !full },
       { kind: 'shp', incremental: !full },
       { kind: 'resolve', incremental: !full },
-      { kind: 'compute' }
+      { kind: 'compute' },
+      { kind: 'reasons' }
     ]
   };
 }
@@ -147,15 +154,32 @@ async function stepNs(ctx, step, cur) {
   if (cur.finished) {
     // Merge the pulled pages into the saved copy.
     const { headers, objs } = await readWork(store, key, cur.pages);
-    const old = await readTable(store, key);
     let outHeaders, outRows;
-    if (step.incremental && old) {
+    if (step.incremental) {
+      let old = null;
+      try { old = await readTable(store, key); } catch (err) { ctx.note(err.message); }
+      if (!old || !old.headers.includes('id')) {
+        // No trustworthy saved copy to add changes to: pull this search in full instead.
+        await clearWork(store, key, cur.pages);
+        step.incremental = false;
+        for (const k of Object.keys(cur)) delete cur[k];
+        ctx.note(`NetSuite ${step.source}: saved copy unusable, pulling the whole search instead`);
+        return false;
+      }
       const changed = new Set(objs.map(o => String(o.id)));
       const { headers: h, oldRows } = unify(old, headers);
       const idIdx = h.indexOf('id');
       const kept = oldRows.filter(a => !changed.has(String(a[idIdx])));
       outHeaders = h; outRows = kept.concat(toArrays(objs, h));
-      ctx.note(`NetSuite ${step.source === 'so' ? 'sales' : 'transfer'} orders: ${changed.size} changed orders merged`);
+      // A quick refresh only adds and updates orders, so the copy can't shrink much.
+      if (outRows.length < old.rows.length * 0.95) {
+        await clearWork(store, key, cur.pages);
+        step.incremental = false;
+        for (const k of Object.keys(cur)) delete cur[k];
+        ctx.note(`NetSuite ${step.source}: merge would shrink the copy from ${old.rows.length} to ${outRows.length} rows; pulling the whole search instead`);
+        return false;
+      }
+      ctx.note(`NetSuite ${step.source === 'so' ? 'sales' : 'transfer'} orders: ${changed.size} changed orders merged (${old.rows.length} -> ${outRows.length} rows)`);
     } else {
       outHeaders = headers; outRows = toArrays(objs, headers);
       ctx.note(`NetSuite ${step.source === 'so' ? 'sales' : 'transfer'} orders: ${outRows.length} rows`);
@@ -213,7 +237,15 @@ async function stepAvo(ctx, step, cur) {
     let rows;
     st.leftOpen = [];
     if (step.incremental) {
-      const old = await readTable(store, 'avo');
+      let old = null;
+      try { old = await readTable(store, 'avo'); } catch (err) { ctx.note(err.message); }
+      if (!old) {
+        await clearWork(store, 'avo', cur.pages);
+        step.incremental = false;
+        for (const k of Object.keys(cur)) delete cur[k];
+        ctx.note('Avectous orders: saved copy unusable, pulling the whole report instead');
+        return false;
+      }
       const map = new Map();
       if (old) for (const a of old.rows) { const o = {}; old.headers.forEach((h, i) => { o[h] = a[i]; }); map.set(String(o.OrderNumber), o); }
       for (const [k, o] of map) {
@@ -280,10 +312,18 @@ async function stepShp(ctx, step, cur) {
     const fresh = objs.map(o => pick(o, SHP_KEEP));
     let rows;
     if (step.incremental) {
-      const old = await readTable(store, 'shp');
+      let old = null;
+      try { old = await readTable(store, 'shp'); } catch (err) { ctx.note(err.message); }
+      if (!old) {
+        await clearWork(store, 'shp', cur.pages);
+        step.incremental = false;
+        for (const k of Object.keys(cur)) delete cur[k];
+        ctx.note('Avectous shipments: saved copy unusable, pulling every order date instead');
+        return false;
+      }
       const days = new Set(cur.days);
-      const oIdx = old ? old.headers.indexOf('OrderDate') : -1;
-      const kept = old ? old.rows.filter(a => !days.has(isoDay(a[oIdx]))) : [];
+      const oIdx = old.headers.indexOf('OrderDate');
+      const kept = old.rows.filter(a => !days.has(isoDay(a[oIdx])));
       rows = kept.concat(toArrays(fresh, SHP_KEEP));
     } else {
       rows = toArrays(fresh, SHP_KEEP);
@@ -347,20 +387,79 @@ async function stepCompute(ctx) {
   const { store, results, compute } = ctx;
   const [nsSo, nsTo, avo, shp] = await Promise.all(['ns-so', 'ns-to', 'avo', 'shp'].map(n => readTable(store, n)));
   if (!nsSo || !nsTo || !avo || !shp) throw new Error('A saved copy is missing; the next full refresh will rebuild it');
+  // Sanity check against the last good run: totals only grow, so a big drop means
+  // the saved copy is damaged. Don't publish numbers from it; rebuild instead.
+  const prev = ctx.st.lastCounts || null;
+  const counts = { nsSo: nsSo.rows.length, nsTo: nsTo.rows.length, avo: avo.rows.length, shp: shp.rows.length };
+  if (prev) {
+    for (const k of Object.keys(counts)) {
+      if (prev[k] && counts[k] < prev[k] * 0.9) {
+        ctx.st.requested = 'full';
+        throw new Error(`Saved ${k} copy dropped from ${prev[k]} to ${counts[k]} rows; numbers not published, full rebuild queued`);
+      }
+    }
+  }
   const out = compute.computeAll({ nsSo, nsTo, avo, shp });
+  ctx.st.lastCounts = counts;
   const savedAt = new Date().toISOString();
-  await results.setJSON(out.ids.integrations, { result: out.integrations, savedAt, ranBy: 'Auto-refresh' });
   if (!out.orderStatusError) {
     await results.setJSON(out.ids.orderStatus, { result: out.orderStatus, savedAt, ranBy: 'Auto-refresh' });
+    ctx.note('Order Status updated');
   } else {
     ctx.note(`Order Status not updated: ${out.orderStatusError}`);
   }
-  ctx.note('Order Status and Integrations Status updated');
+  // Integrations Status is saved after the next step adds Avectous's reasons.
+  await store.setJSON('work:integrations', { id: out.ids.integrations, result: out.integrations });
   return true;
 }
 
-const STEP_FN = { ns: stepNs, avo: stepAvo, shp: stepShp, resolve: stepResolve, compute: stepCompute };
-const STEP_EST = { ns: EST.ns, avo: EST.av, shp: EST.av, resolve: EST.av, compute: EST.compute };
+// For each order on the never-reached-Avectous lists, look up Avectous's
+// Interface - Order log and keep the latest attempt's result. Cached for 3
+// hours so hourly refreshes only re-check what's new. Then save Integrations.
+const REASON_TTL_MS = 3 * 3600 * 1000;
+const REASON_CAP = 200;
+async function stepReasons(ctx, step, cur) {
+  const { store, results, clients, compute } = ctx;
+  const parked = await store.get('work:integrations', { type: 'json' });
+  if (!parked) return true;
+  const cache = (await store.get('reasons-cache', { type: 'json' })) || {};
+  if (!cur.todo) {
+    const list = compute.missingOrders(parked.result).slice(0, REASON_CAP);
+    const nowMs = Date.now();
+    cur.list = list;
+    cur.todo = list.filter(m => !cache[m.order] || nowMs - Date.parse(cache[m.order].checkedAt) > REASON_TTL_MS);
+    cur.i = 0;
+  }
+  if (cur.i < cur.todo.length) {
+    const m = cur.todo[cur.i];
+    let why;
+    try {
+      const page = await clients.avPage({ report: 'interface', pageIndex: 1, pageLimit: 50, parameters: { OrderNumber: m.order }, timeoutMs: ctx.timeLeft() - 1500 });
+      why = compute.summarizeReason(page.rows.filter(r => String(r.OrderNumber) === m.order), m.exported);
+    } catch (err) {
+      why = { label: 'Not checked yet', detail: `Avectous lookup failed: ${err.message}`, at: '' };
+    }
+    cache[m.order] = { ...why, checkedAt: new Date().toISOString() };
+    await store.setJSON('reasons-cache', cache);
+    cur.i++;
+    ctx.progress = `Asking Avectous why orders are missing: ${cur.i} of ${cur.todo.length}`;
+    return false;
+  }
+  const reasons = {};
+  for (const m of cur.list) if (cache[m.order]) reasons[m.order] = cache[m.order];
+  // Keep the cache to orders still missing.
+  const keep = {};
+  for (const m of cur.list) if (cache[m.order]) keep[m.order] = cache[m.order];
+  await store.setJSON('reasons-cache', keep);
+  compute.applyReasons(parked.result, reasons);
+  await results.setJSON(parked.id, { result: parked.result, savedAt: new Date().toISOString(), ranBy: 'Auto-refresh' });
+  await store.delete('work:integrations').catch(() => {});
+  ctx.note(`Integrations Status updated (${cur.todo.length} missing orders checked with Avectous)`);
+  return true;
+}
+
+const STEP_FN = { ns: stepNs, avo: stepAvo, shp: stepShp, resolve: stepResolve, compute: stepCompute, reasons: stepReasons };
+const STEP_EST = { ns: EST.ns, avo: EST.av, shp: EST.av, resolve: EST.av, compute: EST.compute, reasons: EST.av };
 
 // ---------- one run ----------
 export async function runTick({ store, results, clients, compute, now = () => Date.now() }) {
@@ -399,6 +498,7 @@ export async function runTick({ store, results, clients, compute, now = () => Da
         st.errors = 0;
       } catch (err) {
         st.errors++;
+        if (/full rebuild queued/.test(err.message)) st.errors = MAX_ERRORS;
         st.lastError = `${new Date(now()).toISOString()} ${step.kind}: ${err.message}`;
         if (st.errors >= MAX_ERRORS) {
           ctx.note(`Refresh stopped after ${MAX_ERRORS} errors in a row: ${err.message}`);

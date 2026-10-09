@@ -156,7 +156,10 @@
       meth['!cols'] = [{wch:22},{wch:120}];
       add(wb, 'Method', meth);
 
-      add(wb, 'SO Sync Missing',         ()=> sheet(SYNC_HEADERS,   a.soSync.rows));
+      // Missing lists carry Avectous's reason (from its Interface - Order log) when it was checked.
+      const REASON_HEADERS = SYNC_HEADERS.concat(["Why it's missing", 'Avectous message', 'Avectous attempt']);
+      const syncSheet = rows => sheet((rows || []).some(r => r.length > 7) ? REASON_HEADERS : SYNC_HEADERS, rows || []);
+      add(wb, 'SO Sync Missing',         ()=> syncSheet(a.soSync.rows));
       // Everything the sync count deliberately left out, with the reason, so
       // "why isn't this order on the missing list" is answerable from the file.
       add(wb, 'SO Sync Excluded', ()=> sheet(SYNC_HEADERS.concat(['Excluded because']), a.soSync.excludedRows || []));
@@ -164,7 +167,7 @@
       add(wb, 'Held But In Avectous',
         ()=> sheet(SYNC_HEADERS.concat(['Hold type']),
              (a.soSync.heldButSentRows || []).concat(a.toSync.heldButSentRows || [])));
-      add(wb, 'TO Sync Missing',         ()=> sheet(SYNC_HEADERS,   a.toSync.rows));
+      add(wb, 'TO Sync Missing',         ()=> syncSheet(a.toSync.rows));
       add(wb, 'SO Fulfillments Missing', ()=> sheet(FULFIL_HEADERS, a.soFulfil.rows));
       add(wb, 'TO Fulfillments Missing', ()=> sheet(FULFIL_HEADERS, a.toFulfil.rows));
       const testSet = new Set(current.orphans.tests.map(r => r[0]));

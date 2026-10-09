@@ -41,10 +41,15 @@
         <div class="sub" id="autoLine" style="margin:4px 0 0;">Checking&hellip;</div>
       </div>
       <div style="display:flex; gap:8px;">
+        <button class="ghost" id="autoRebuildBtn" type="button" title="Throw away the saved copy and pull everything again">Rebuild</button>
         <button class="ghost" id="autoNowBtn" type="button">Refresh now</button>
         <button class="ghost" id="autoToggleBtn" type="button">Start</button>
       </div>
     </div>
+    <details style="margin-top:8px; font-size:12px;">
+      <summary style="cursor:pointer; color:var(--muted);">Recent activity</summary>
+      <pre id="autoHistory" style="white-space:pre-wrap; margin:6px 0 0; font-size:11.5px; color:var(--muted);"></pre>
+    </details>
     <div id="autoNew" style="display:none; margin-top:8px; font-size:12.5px;">
       New numbers were saved. <a href="#" id="autoReload">Load them</a>
     </div>
@@ -553,6 +558,10 @@ function renderAuto(){
   if(s.lastError && s.status === 'running') parts.push(`Retrying after: ${s.lastError.replace(/^\S+ /,'')}`);
   if(s.lastCycle && s.lastCycle.ok === false) parts.push(`Last attempt stopped: ${s.lastCycle.error}`);
   line.textContent = parts.join(' ');
+  document.getElementById('autoHistory').textContent = (s.history || []).map(h => {
+    const t = new Date(h.slice(0, 24));
+    return (isNaN(t) ? '' : t.toLocaleString([], { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' }) + '  ') + h.slice(25);
+  }).join('\n') || 'Nothing yet.';
   if(autoSeenSuccess && s.lastSuccessAt && s.lastSuccessAt !== autoSeenSuccess){
     document.getElementById('autoNew').style.display = 'block';
   }
@@ -573,6 +582,9 @@ async function loadAuto(action){
 }
 document.getElementById('autoToggleBtn').addEventListener('click', ()=> loadAuto(autoState && !autoState.paused ? 'pause' : 'start'));
 document.getElementById('autoNowBtn').addEventListener('click', ()=> loadAuto('now'));
+document.getElementById('autoRebuildBtn').addEventListener('click', ()=>{
+  if(confirm('Pull everything from NetSuite and Avectous again? Takes a few hours in the background; the current numbers stay up until it finishes.')) loadAuto('full');
+});
 document.getElementById('autoReload').addEventListener('click', e=>{ e.preventDefault(); location.reload(); });
 loadAuto();
 setInterval(()=> loadAuto(), 20000);
@@ -598,6 +610,26 @@ document.getElementById('runBtn').addEventListener('click', async ()=>{
     btn.disabled = false;
     return;
   }
+  // Ask Avectous why each missing order isn't there (its Interface - Order log).
+  const missingOrders = syncMissingOrders(result).slice(0, 200);
+  if(missingOrders.length){
+    const reasons = {};
+    for(let i = 0; i < missingOrders.length; i++){
+      const m = missingOrders[i];
+      note.textContent = `Checking Avectous for why orders are missing\u2026 ${i + 1} of ${missingOrders.length}`;
+      try{
+        const res = await fetch('/api/avectous', {
+          method:'POST', headers:{'content-type':'application/json'},
+          body: JSON.stringify({ report:'interface', orderNumber: m.order })
+        });
+        const data = await res.json();
+        if(data.ok) reasons[m.order] = summarizeInterfaceRecords(data.rows, m.exported);
+      } catch(err){ /* leave as "Not checked yet" */ }
+      await sleep(250);
+    }
+    applySyncReasons(result, reasons);
+  }
+
   const sync = await syncSectionToShared(INTEGRATIONS.id, result, name || null);
 
   // Order Status runs on the same NetSuite searches and Avectous shipments
@@ -664,7 +696,13 @@ function auditCard(a, isFulfil){
           : `NetSuite created these ${fmt(a.missing)} orders but they never reached Avectous.`}
         <strong>The warehouse can't ship what it doesn't have.</strong>
         ${a.sentButAbsent ? `<br>NetSuite stamped an export date on ${fmt(a.sentButAbsent)} of them, so it believes they were handled and will not send them again.` : ''}
-      </div>` : ''}
+      </div>
+      ${a.reasonCounts && a.reasonCounts.length ? `
+      <div style="margin-top:10px; font-size:12.5px;">
+        <div style="font-weight:700; margin-bottom:4px;">Why they're missing, per Avectous</div>
+        ${a.reasonCounts.map(rc => `<div class="ig-line sub"><span class="k">${escapeHtml(rc.label)}</span><span class="v">${fmt(rc.count)}</span></div>`).join('')}
+        <div style="color:var(--muted); margin-top:4px;">Order-by-order detail is in the export.</div>
+      </div>` : ''}` : ''}
     </div>`;
 }
 

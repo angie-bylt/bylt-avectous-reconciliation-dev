@@ -7,7 +7,8 @@ export const NS_SEARCHES = { so: '4875', to: '4872' };
 
 export const AV_REPORTS = {
   orders: { PageId: 6, PageName: 'Orders', PanelName: 'Orders' },
-  shipments: { PageId: 11900, PageName: 'Shipments by Order/Tracking', PanelName: 'Shipments by Order/Tracking' }
+  shipments: { PageId: 11900, PageName: 'Shipments by Order/Tracking', PanelName: 'Shipments by Order/Tracking' },
+  interface: { PageId: 122, PageName: 'Interface - Order', PanelName: 'Interface - Order' }
 };
 
 const AV_ENDPOINT = 'https://bylt.avectous.com/API/MessageGateway/v1/MessageGateway/json';

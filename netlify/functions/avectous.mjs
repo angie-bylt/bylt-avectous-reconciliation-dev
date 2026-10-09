@@ -15,7 +15,11 @@ const REPORTS = {
   // Slow unless filtered, so it is always asked for one order date at a time.
   // The date must be written exactly as Avectous's screen shows it.
   shipments: { PageId: 11900, PageName: 'Shipments by Order/Tracking', PanelName: 'Shipments by Order/Tracking',
-               requiresOrderDate: true }
+               requiresOrderDate: true },
+  // Avectous's log of every order NetSuite sent it, with why it was rejected.
+  // Looked up one order at a time; only the fields the dashboard needs come back.
+  interface: { PageId: 122, PageName: 'Interface - Order', PanelName: 'Interface - Order',
+               requiresOrderNumber: true, keep: ['OrderNumber', 'RecordDate', 'Action', 'Success', 'LoadingResult'] }
 };
 
 const PAGE_LIMIT = 1000;
@@ -43,7 +47,7 @@ export default async (req) => {
   if (!report) return json(400, { ok: false, error: `Unknown report: ${body.report}` });
   const pageIndex = Math.max(1, parseInt(body.pageIndex, 10) || 1);
 
-  const { requiresOrderDate, ...pageDef } = report;
+  const { requiresOrderDate, requiresOrderNumber, keep, ...pageDef } = report;
   // Smaller pages answer faster when Avectous is busy; the browser drops the
   // size if a page fails. Only sizes that divide 1,000 so pages stay aligned.
   const pageLimit = [1000, 500, 250].includes(parseInt(body.pageLimit, 10)) ? parseInt(body.pageLimit, 10) : PAGE_LIMIT;
@@ -53,6 +57,11 @@ export default async (req) => {
       return json(400, { ok: false, error: 'This report needs an orderDate (YYYY-MM-DD).' });
     }
     messageContent.Parameters = { OrderDate: `${body.orderDate} 00:00:00` };
+  }
+  if (requiresOrderNumber) {
+    const num = String(body.orderNumber || '').trim();
+    if (!num || num.length > 60) return json(400, { ok: false, error: 'This report needs an orderNumber.' });
+    messageContent.Parameters = { OrderNumber: num };
   }
 
   let res, text;
@@ -108,7 +117,7 @@ export default async (req) => {
     totalLines: page.TotalLines,
     // Avectous sends "True"/"False" as text, not true/false.
     hasMore: String(page.hasMorePages ?? page.HasMorePages).toLowerCase() === 'true',
-    rows: page.MessageContent
+    rows: keep ? page.MessageContent.map(r => Object.fromEntries(keep.map(k => [k, r[k] ?? null]))) : page.MessageContent
   });
 };
 

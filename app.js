@@ -2192,3 +2192,74 @@ function computeIntegrations(soData, toData, syncData, shipData){
     }
   };
 }
+
+
+// ---------- Why an order never reached Avectous ----------
+// Avectous logs every order NetSuite sends it on its "Interface - Order" page
+// (report 122): one row per attempt, with Success and a LoadingResult message.
+// For each order on the sync-missing lists we look up those attempts and keep
+// the latest one, so the list can say *why* the order isn't in Avectous.
+// Used by Update Dashboard in the browser and by the automatic refresh.
+
+const AV_REASON_LABELS = [
+  [/failed due to line problems/i,                      'Rejected: a problem with one of its lines'],
+  [/does not exist as a simple or configurable product/i, 'Rejected: an item isn\'t set up in Avectous'],
+  [/channel does not exist/i,                           'Rejected: sales channel isn\'t set up in Avectous'],
+  [/duplicate record/i,                                 'Rejected as a duplicate'],
+  [/updates disabled/i,                                 'Update ignored by Avectous'],
+];
+
+// records: Interface - Order rows for one order. exported: NetSuite stamped a WMS export date.
+function summarizeInterfaceRecords(records, exported){
+  const recs = (records || []).filter(r => r && r.RecordDate)
+    .sort((a, b) => String(a.RecordDate).localeCompare(String(b.RecordDate)));
+  if(!recs.length){
+    return exported
+      ? { label: 'NetSuite marked it sent, but Avectous has no record of receiving it', detail: '', at: '' }
+      : { label: 'NetSuite hasn\'t sent it to Avectous', detail: '', at: '' };
+  }
+  const last = recs[recs.length - 1];
+  const ok = last.Success === true || String(last.Success).toLowerCase() === 'true';
+  const msg = String(last.LoadingResult || '').trim();
+  const at = String(last.RecordDate).replace('T', ' ').slice(0, 16);
+  if(ok){
+    return { label: 'Accepted by Avectous since; should clear on the next refresh', detail: msg, at };
+  }
+  const hit = AV_REASON_LABELS.find(([re]) => re.test(msg));
+  return { label: hit ? hit[1] : `Rejected: ${msg || 'no reason given'}`, detail: msg, at };
+}
+
+// reasons: { [orderNumber]: {label, detail, at} }. Adds a "Why it's missing"
+// value to every sync-missing row and a count per reason for the card.
+function applySyncReasons(result, reasons){
+  if(!result || !result.audits || !reasons) return result;
+  for(const key of ['soSync', 'toSync']){
+    const a = result.audits[key];
+    if(!a || !Array.isArray(a.rows)) continue;
+    const counts = {};
+    a.rows = a.rows.map(r => {
+      const why = reasons[String(r[0])];
+      const label = why ? why.label : 'Not checked yet';
+      counts[label] = (counts[label] || 0) + 1;
+      const base = r.slice(0, 7);
+      return base.concat([label, why ? why.detail : '', why ? why.at : '']);
+    });
+    a.reasonCounts = Object.entries(counts).sort((x, y) => y[1] - x[1]).map(([label, count]) => ({ label, count }));
+  }
+  return result;
+}
+
+// Order numbers on the two sync-missing lists, with whether NetSuite stamped an export date.
+function syncMissingOrders(result){
+  const out = [];
+  if(!result || !result.audits) return out;
+  for(const key of ['soSync', 'toSync']){
+    const a = result.audits[key];
+    if(!a || !Array.isArray(a.rows)) continue;
+    for(const r of a.rows){
+      const stamp = String(r[6] || '').trim().toLowerCase();
+      out.push({ order: String(r[0]), exported: !!stamp && stamp !== 'never exported' });
+    }
+  }
+  return out;
+}

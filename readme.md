@@ -447,3 +447,36 @@ per-request limit, so the shipments pull stopped with a 504. Box 4 now works
 like box 3: up to 5 tries per page with growing waits, page size drops
 1,000 -> 500 -> 250 on a slow day, and **Resume pull** continues from the same
 day and row.
+
+## Why orders never reached Avectous (Oct 9)
+For each order on the Sales/Transfer order sync "Missing" lists, the dashboard
+looks the order up in Avectous's **Interface - Order** log (report 122, filtered
+by OrderNumber) and keeps the **latest** attempt. Avectous logs every attempt;
+e.g. #55772858 was first rejected as a duplicate (23:01), then failed on line
+problems (23:31) — the 23:31 result is what's shown.
+
+Shown as: a "Why they're missing, per Avectous" breakdown on each sync card, and
+three extra columns on the SO/TO Sync Missing export sheets ("Why it's missing",
+the raw Avectous message, and the attempt time).
+
+Plain-language labels (app.js `AV_REASON_LABELS`): line problem, item not set up
+in Avectous, channel not set up, duplicate, update ignored. No log entry at all
+is split by whether NetSuite stamped a WMS export date ("NetSuite marked it sent,
+but Avectous has no record" vs "NetSuite hasn't sent it"). A latest attempt that
+succeeded reads "Accepted by Avectous since; should clear on the next refresh".
+
+Update Dashboard checks up to 200 missing orders (one small request each). The
+automatic refresh does the same as its last step, caching each answer for 3
+hours so hourly runs only re-check new or stale ones. Only order number, time,
+action, success and message are returned from the Interface page.
+
+### Safety checks after the Oct 9 incident (Dev)
+The 9:15 AM quick refresh on Dev saved a NetSuite copy containing only the
+orders changed since Oct 7 (~15k instead of ~120k), and published Order Status
+from it. Exact trigger not yet confirmed. Now:
+- A saved copy with any missing piece is never used ("incomplete" error).
+- A quick refresh that has no usable saved copy, or whose merge would shrink
+  the copy by more than 5%, pulls that source in full instead.
+- Before publishing, row counts are compared with the last good run; a drop of
+  more than 10% blocks publishing and queues a full rebuild.
+- Page has a **Rebuild** button (full pull) and a **Recent activity** log.
