@@ -497,3 +497,18 @@ Left out on purpose: missing cost / ship method.
   (no saved copy / no id column / missing piece N / row count mismatch), pieces
   are read in small batches with one retry, and `/api/refresh?inspect=1` shows
   each saved copy's rows, columns, pieces and any missing pieces.
+
+## Systems Dashboard (final design, Oct 9)
+Two sections: Incoming orders (blue-grey) and Ship confirmations (lavender-grey),
+each with two equal-height cards. Per card: status (0 missing = All caught up,
+1-99 = Needs attention, 100+ = Problem; Shopify cards = Waiting on Shopify
+access), big missing count and % made it across, change since the last refresh,
+counts in each system, sales/transfer split, "Reasons:" (Avectous Interface log),
+oldest missing, Export.
+Avectous -> NetSuite also shows the warehouse's current order date and
+"In Avectous but not shipped yet": open Avectous orders (not Shipped/Cancelled)
+placed 3+ days before that warehouse date (`computeAgedOpen`, AGED_DAYS = 3),
+with the oldest one's age and an export.
+Change since last refresh: `prevMissing` saved on each result from the previous
+saved run (button and automatic refresh). Header badge shows whether the
+automatic refresh is on and how long ago the numbers were saved.

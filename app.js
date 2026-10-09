@@ -2296,3 +2296,65 @@ function computeWarehouseDay(shipInput){
   for(const [d, n] of byOrderDay){ total += n; if(n > topCount){ top = d; topCount = n; } }
   return top ? { shipDay: lastShip, orderDay: top, share: total ? topCount / total : 0, shipped: total } : null;
 }
+
+
+// ---------- Orders sitting in Avectous that haven't shipped ----------
+// Orders that made it into Avectous fine but are still open (not Shipped or
+// Cancelled) and were placed BEFORE the order date the warehouse is currently
+// shipping, so the warehouse has moved past them. Relative to the warehouse,
+// not today; falls back to today if the warehouse date is unknown.
+// The headline counts online (Shopify) orders only; wholesale and transfer
+// orders ship on their own schedules and are listed separately.
+const AGED_DAYS = 0;
+function addDaysIso(day, n){
+  const d = new Date(day + 'T12:00:00'); d.setDate(d.getDate() + n);
+  const p = x => String(x).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+function agedKind(type){
+  const t = norm(type);
+  if(t === 'shpy') return 'online';
+  if(t === 'tos' || t.startsWith('to')) return 'transfer';
+  return 'wholesale';
+}
+function computeAgedOpen(syncInput, warehouseDay){
+  const data = mergeSheets(syncInput);
+  if(!data || !data.rows || !data.rows.length) return null;
+  const keyCol = guessColumn(data.headers, 'OrderNumber');
+  const stCol = guessColumn(data.headers, 'Status');
+  const dCol = guessColumn(data.headers, 'OrderDate');
+  const tCol = guessColumn(data.headers, 'OrderType');
+  const chCol = guessColumn(data.headers, 'Channel');
+  if(!keyCol || !stCol || !dCol) return null;
+  const base = (warehouseDay && warehouseDay.orderDay) || isoToday();
+  const cutoff = addDaysIso(base, -AGED_DAYS);
+  const seen = new Set();
+  const groups = { online: [], wholesale: [], transfer: [] };
+  for(const r of data.rows){
+    const st = norm(r[stCol]);
+    if(st === 'shipped' || st === 'cancelled' || st === 'canceled') continue;
+    const day = isoDay(r[dCol]);
+    if(!day || day >= cutoff) continue;
+    const k = String(r[keyCol]);
+    if(seen.has(k)) continue;
+    seen.add(k);
+    const type = tCol ? String(r[tCol] || '') : '';
+    groups[agedKind(type)].push([k, day, String(r[stCol] || ''), type, chCol ? String(r[chCol] || '') : '']);
+  }
+  for(const g of Object.values(groups)) g.sort((a, b) => a[1].localeCompare(b[1]));
+  const on = groups.online;
+  return {
+    base, cutoff, days: AGED_DAYS,
+    count: on.length, oldestDay: on.length ? on[0][1] : null, rows: on,
+    wholesale: groups.wholesale, transfer: groups.transfer
+  };
+}
+
+// Missing counts from the previous saved run, so the page can show the change.
+function attachPrevMissing(result, prev, prevSavedAt){
+  const a = prev && prev.audits;
+  if(!result || !a) return result;
+  const m = x => (x && x.missing) || 0;
+  result.prevMissing = { sync: m(a.soSync) + m(a.toSync), fulfil: m(a.soFulfil) + m(a.toFulfil), savedAt: prevSavedAt || null };
+  return result;
+}

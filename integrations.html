@@ -12,9 +12,9 @@
 <header class="topbar">
   <div class="brand">BYLT</div>
   <nav>
-    <a href="systems.html">Systems</a>
     <a href="index.html">Order Status</a>
     <a href="integrations.html" class="current">Integrations Status &ndash; Orders</a>
+    <a href="systems.html">Systems</a>
     <a href="integration-health.html">Inventory &amp; Shipping</a>
     <a href="load-data.html">Load Data</a>
     <a href="#" id="logoutLink" style="margin-left:24px;">Log out</a>
@@ -173,7 +173,7 @@
   </div>
 </main>
 
-<script src="app.js?v=68"></script>
+<script src="app.js?v=69"></script>
 <script src="integrations-export.js?v=65"></script>
 <script>
 const files = { so:null, to:null, sync:null, ship:null };
@@ -612,6 +612,8 @@ document.getElementById('runBtn').addEventListener('click', async ()=>{
     return;
   }
   result.warehouseDay = computeWarehouseDay(files.ship);
+  result.agedOpen = computeAgedOpen(files.sync, result.warehouseDay);
+  attachPrevMissing(result, current, savedAt);
 
   // Ask Avectous why each missing order isn't there (its Interface - Order log).
   const missingOrders = syncMissingOrders(result).slice(0, 200);

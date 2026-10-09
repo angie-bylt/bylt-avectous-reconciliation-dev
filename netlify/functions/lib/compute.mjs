@@ -42,7 +42,7 @@ function load() {
   ctx.window = ctx;
   ctx.globalThis = ctx;
   vm.createContext(ctx);
-  vm.runInContext(code + '\n;globalThis.__api = { computeIntegrations, computeOrderStatus, stripLedgers, INTEGRATIONS, ORDER_STATUS, norm, summarizeInterfaceRecords, applySyncReasons, syncMissingOrders, computeWarehouseDay };', ctx);
+  vm.runInContext(code + '\n;globalThis.__api = { computeIntegrations, computeOrderStatus, stripLedgers, INTEGRATIONS, ORDER_STATUS, norm, summarizeInterfaceRecords, applySyncReasons, syncMissingOrders, computeWarehouseDay, computeAgedOpen, attachPrevMissing };', ctx);
 
   // Every quoted name in app.js, normalised. A NetSuite column is kept only if
   // the comparison could look it up by one of these names (same matching rules
@@ -109,7 +109,10 @@ export function computeAll({ nsSo, nsTo, avo, shp }) {
   const sync = [toObjects(avo, false)];
   const ship = [toObjects(shp, false)];
   const integrations = api.computeIntegrations(so, to, sync, ship);
-  if (integrations && !integrations.error) integrations.warehouseDay = api.computeWarehouseDay(ship);
+  if (integrations && !integrations.error) {
+    integrations.warehouseDay = api.computeWarehouseDay(ship);
+    integrations.agedOpen = api.computeAgedOpen(sync, integrations.warehouseDay);
+  }
   const orderStatus = api.computeOrderStatus(so, to, ship);
   return {
     ids: { integrations: api.INTEGRATIONS.id, orderStatus: api.ORDER_STATUS.id },
@@ -123,3 +126,4 @@ export function computeAll({ nsSo, nsTo, avo, shp }) {
 export function missingOrders(result) { return load().api.syncMissingOrders(result); }
 export function summarizeReason(records, exported) { return load().api.summarizeInterfaceRecords(records, exported); }
 export function applyReasons(result, reasons) { return load().api.applySyncReasons(result, reasons); }
+export function attachPrev(result, prev, prevSavedAt) { return load().api.attachPrevMissing(result, prev, prevSavedAt); }

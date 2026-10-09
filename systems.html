@@ -2,17 +2,101 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>BYLT / Systems</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BYLT / Systems Dashboard</title>
 <link rel="stylesheet" href="style.css">
-<script src="auth-check.js?v=67"></script>
+<script src="auth-check.js?v=69"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
-  .sd-sec{ font-size:12px; font-weight:800; letter-spacing:0.6px; color:var(--muted); margin:6px 0 10px; }
-  .sd-pending{ font-size:11px; font-weight:700; padding:2px 8px; border-radius:10px; background:#fdf6ec; color:#7a4d06; margin-left:8px; vertical-align:middle; }
-  .sd-split{ font-size:11.5px; color:var(--muted); padding-left:8px; margin-top:6px; }
-  .sd-actions{ margin-top:12px; padding-left:8px; display:flex; gap:8px; flex-wrap:wrap; }
-  .sd-note{ font-size:12px; color:var(--muted); padding-left:8px; margin-top:10px; line-height:1.5; }
-  .sd-wh{ margin-top:11px; margin-left:8px; background:#eef4fb; border:1px solid #cfe0f3; border-radius:7px; padding:9px 11px; font-size:12.5px; color:#1d3b5e; line-height:1.5; }
+  body{ background:linear-gradient(180deg,#b8c4d3 0%,#a9b7c8 100%); min-height:100vh; }
+  .sd-main{ max-width:1360px; margin:0 auto; padding:24px 28px 40px; }
+  .live{ display:inline-flex; align-items:center; gap:7px; font-size:12.5px; border-radius:20px; padding:3px 11px; margin-left:10px; font-weight:600; vertical-align:middle; }
+  .live.on{ color:#156b44; background:#e3f5ec; }
+  .live.off{ color:#6b7684; background:#eef1f5; }
+  .live i{ width:8px; height:8px; border-radius:50%; background:currentColor; }
+  .live.on i{ background:#2fb37a; animation:pulse 2s infinite; }
+  @keyframes pulse{ 0%{ box-shadow:0 0 0 0 rgba(47,179,122,.55); } 70%{ box-shadow:0 0 0 8px rgba(47,179,122,0); } 100%{ box-shadow:0 0 0 0 rgba(47,179,122,0); } }
+  @media (prefers-reduced-motion:reduce){ .live.on i{ animation:none; } }
+
+  .sd-sections{ display:grid; grid-template-columns:1fr 1fr; gap:22px; align-items:stretch; }
+  .sd-sec{ display:flex; flex-direction:column; background:rgba(226,232,240,0.85); border:1px solid rgba(255,255,255,0.7); border-radius:20px; padding:18px 18px 20px; box-shadow:0 10px 30px rgba(30,50,80,0.12); }
+  .sd-sec.ship{ background:rgba(229,226,240,0.88); }
+  .sd-sec-head{ display:flex; align-items:center; gap:12px; margin:2px 4px 16px; }
+  .sd-sec-icon{ width:40px; height:40px; border-radius:12px; display:flex; align-items:center; justify-content:center; background:var(--navy); color:#fff; flex:none; box-shadow:0 4px 10px rgba(20,40,70,0.25); }
+  .sd-sec.ship .sd-sec-icon{ background:#3d4170; }
+  .sd-sec-head h2{ margin:0; font-size:18px; color:var(--navy); }
+  .sd-sec-head p{ margin:2px 0 0; font-size:13px; color:var(--muted); }
+  .sd-sec-head .path{ display:flex; align-items:center; gap:6px; margin-left:auto; color:var(--navy); }
+  .sd-sec-head .path svg{ width:18px; height:18px; }
+  .sd-cards{ display:grid; grid-template-columns:1fr 1fr; gap:16px; align-items:stretch; flex:1; }
+
+  .sd-card{ height:100%; background:#fff; border:1px solid rgba(255,255,255,0.9); border-radius:16px; padding:18px; box-shadow:0 6px 18px rgba(30,50,80,0.10); display:flex; flex-direction:column; }
+  .sd-status{ display:inline-flex; align-items:center; gap:7px; align-self:flex-start; font-size:12.5px; font-weight:700; border-radius:20px; padding:4px 11px 4px 8px; }
+  .sd-status .emo{ font-size:15px; line-height:1; }
+  .sd-status.ok{ background:#e3f5ec; color:#156b44; }
+  .sd-status.warn{ background:#fdf0dc; color:#94570a; }
+  .sd-status.bad{ background:#fde4e4; color:#a32020; }
+  .sd-status.wait{ background:#eef1f5; color:#6b7684; }
+  .sd-card h3{ margin:12px 0 14px; font-size:18px; font-weight:800; color:var(--navy); display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .sysi{ display:inline-flex; align-items:center; gap:6px; }
+  .sysi svg{ width:20px; height:20px; }
+
+  .sd-hero{ display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .sd-stat{ border-radius:12px; padding:12px 12px 11px; }
+  .sd-stat .big{ font-size:34px; font-weight:800; line-height:1; letter-spacing:-0.5px; }
+  .sd-stat .cap{ font-size:12.5px; font-weight:600; margin-top:5px; }
+  .sd-stat.miss{ background:linear-gradient(160deg,#ffd9d9 0%,#ffeaea 100%); color:#b42323; }
+  .sd-stat.miss.zero{ background:linear-gradient(160deg,#c9f0dc 0%,#e8f8ef 100%); color:#177a4c; }
+  .sd-stat.pct{ background:linear-gradient(160deg,#c9f0dc 0%,#e8f8ef 100%); color:#177a4c; }
+  .sd-stat.pct.warn{ background:#fdf0dc; color:#94570a; }
+  .sd-stat.pct.bad{ background:#fde4e4; color:#a32020; }
+  .sd-delta{ font-size:12.5px; font-weight:700; margin:9px 0 0; }
+  .sd-delta.up{ color:#b42323; } .sd-delta.down{ color:#177a4c; } .sd-delta.same{ color:var(--muted); }
+
+  .sd-rows{ margin-top:8px; }
+  .sd-row{ display:flex; justify-content:space-between; align-items:baseline; gap:10px; padding:8px 0; border-bottom:1px solid #eef1f5; font-size:13.5px; color:#3d4a5c; }
+  .sd-row .v{ font-weight:700; color:var(--navy); white-space:nowrap; }
+  .sd-split{ display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:10px; }
+  .sd-split > div{ background:#f6f8fb; border-radius:10px; padding:8px 10px; }
+  .sd-split .k{ font-size:12px; color:var(--muted); }
+  .sd-split .n{ font-size:18px; font-weight:800; color:var(--green); line-height:1.2; }
+  .sd-split .n.bad{ color:var(--red); }
+  .sd-why{ margin-top:12px; }
+  .sd-why h4{ margin:0 0 2px; font-size:13px; color:var(--navy); }
+  .sd-why .r{ display:flex; justify-content:space-between; gap:10px; padding:5px 0; border-bottom:1px solid #f1f3f7; font-size:12.5px; color:#3d4a5c; }
+  .sd-why .r b{ color:var(--navy); }
+  .sd-chip{ margin-top:10px; display:flex; align-items:center; gap:8px; font-size:12.5px; border-radius:10px; padding:8px 11px; }
+  .sd-chip svg{ width:17px; height:17px; flex:none; }
+  .sd-chip.age{ color:#7a4d06; background:#fdf3e1; }
+  .sd-chip.wh{ color:#3d4a5c; background:#f2f6fc; }
+  .sd-chip.wh svg{ color:var(--blue); }
+  .sd-chip b{ color:inherit; }
+  .sd-chip.wh b{ color:var(--navy); }
+  .aged{ margin-top:10px; background:#f6f8fb; border:1px solid #e6eaf0; border-radius:12px; padding:12px; }
+  .aged .top{ display:flex; align-items:center; gap:8px; font-size:12.5px; color:#3d4a5c; }
+  .aged .top svg{ width:17px; height:17px; color:#94570a; flex:none; }
+  .aged .nums{ display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:8px; }
+  .aged .nums > div{ background:#fff; border-radius:9px; padding:7px 9px; }
+  .aged .nums .v{ font-size:20px; font-weight:800; color:#94570a; line-height:1.15; }
+  .aged .nums .k{ font-size:11.5px; color:var(--muted); }
+  .aged .sub{ font-size:11.5px; color:var(--muted); margin-top:7px; }
+  .aged button{ margin-top:9px; width:100%; border:1px solid #c9d1dc; background:#fff; color:var(--navy); border-radius:20px; padding:6px; font-size:12.5px; font-weight:700; cursor:pointer; }
+  .spacer{ flex:1; min-height:16px; }
+  .sd-export{ width:100%; border:1.5px solid var(--navy); background:#fff; color:var(--navy); border-radius:30px; padding:9px; font-size:14px; font-weight:700; cursor:pointer; }
+  .sd-export:hover, .aged button:hover{ background:#f3f6fb; }
+  .sd-export:disabled{ opacity:0.4; cursor:default; }
+  .sd-export:focus-visible, .aged button:focus-visible{ outline:2px solid var(--blue); outline-offset:2px; }
+
+  .sd-card.pending{ background:rgba(240,243,247,0.75); border:1.5px dashed #b9c4d2; box-shadow:none; }
+  .sd-card.pending h3{ color:#7c8798; }
+  .sd-card.pending .sd-stat{ background:#e9edf2; color:#9aa4b2; }
+  .sd-card.pending .sd-stat .big{ font-size:22px; }
+  .sd-card.pending .sd-row .v{ color:#9aa4b2; }
+  .sd-card.pending .note{ margin-top:12px; font-size:12.5px; color:var(--muted); }
+  .sd-foot{ margin-top:20px; text-align:center; font-size:12.5px; color:#2c3a4d; }
+
+  @media (max-width:1240px){ .sd-sections{ grid-template-columns:1fr; } }
+  @media (max-width:640px){ .sd-cards, .sd-hero{ grid-template-columns:1fr; } .sd-sec-head .path{ display:none; } }
 </style>
 </head>
 <body>
@@ -20,9 +104,9 @@
 <header class="topbar">
   <div class="brand">BYLT</div>
   <nav>
-    <a href="systems.html" class="current">Systems</a>
     <a href="index.html">Order Status</a>
     <a href="integrations.html">Integrations Status &ndash; Orders</a>
+    <a href="systems.html" class="current">Systems</a>
     <a href="integration-health.html">Inventory &amp; Shipping</a>
     <a href="load-data.html">Load Data</a>
     <a href="#" id="logoutLink" style="margin-left:24px;">Log out</a>
@@ -32,130 +116,216 @@
 <div class="crumbline" style="display:flex; justify-content:space-between; align-items:flex-end; gap:16px; flex-wrap:wrap;">
   <div>
     <h1>Systems Dashboard</h1>
-    <div class="path" id="asOf">Loading&hellip;</div>
+    <div class="path"><span id="asOf">Loading&hellip;</span><span id="live"></span></div>
   </div>
   <button class="ghost" id="refreshBtn" type="button">Refresh</button>
 </div>
 
-<main>
-  <div class="sd-sec">INCOMING ORDERS</div>
-  <div class="ig-grid" id="incoming"></div>
-
-  <div class="sd-sec">SHIP CONFIRMATIONS</div>
-  <div class="ig-grid" id="shipping"></div>
-
-  <div class="sub" style="margin-top:4px;">
-    Numbers come from the same refresh as Integrations Status &ndash; Orders. Sales and transfer orders are added together here; the Integrations page has them separately.
+<main class="sd-main">
+  <div class="sd-sections">
+    <section class="sd-sec" aria-labelledby="inTitle">
+      <div class="sd-sec-head">
+        <div class="sd-sec-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg></div>
+        <div><h2 id="inTitle">Incoming orders</h2><p>Shopify to NetSuite to the warehouse</p></div>
+        <div class="path" id="inPath" aria-hidden="true"></div>
+      </div>
+      <div class="sd-cards" id="incoming"></div>
+    </section>
+    <section class="sd-sec ship" aria-labelledby="outTitle">
+      <div class="sd-sec-head">
+        <div class="sd-sec-icon" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 3h15v13H1z"/><path d="M16 8h4l3 3v5h-7z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg></div>
+        <div><h2 id="outTitle">Ship confirmations</h2><p>Warehouse to NetSuite to Shopify</p></div>
+        <div class="path" id="outPath" aria-hidden="true"></div>
+      </div>
+      <div class="sd-cards" id="shipping"></div>
+    </section>
   </div>
+  <p class="sd-foot">Numbers come from the same refresh as Integrations Status &ndash; Orders. Sales and transfer orders are added together here.</p>
 </main>
 
-<script src="app.js?v=68"></script>
+<script src="app.js?v=69"></script>
 <script>
 document.getElementById('logoutLink').addEventListener('click', e=>{ e.preventDefault(); logout(); });
 document.getElementById('refreshBtn').addEventListener('click', ()=> load());
 
 const fmt = n => (n === null || n === undefined || isNaN(n)) ? '\u2014' : Number(n).toLocaleString();
+const sum = (a, b, k) => (a && a[k] || 0) + (b && b[k] || 0);
+const fmtDay = d => d ? new Date(d + 'T12:00:00').toLocaleDateString([], { weekday:'short', month:'numeric', day:'numeric' }) : '';
+const daysSince = d => d ? Math.max(0, Math.round((new Date(isoToday() + 'T12:00:00') - new Date(d + 'T12:00:00')) / 864e5)) : null;
+const plural = (n, w) => `${fmt(n)} ${w}${n === 1 ? '' : 's'}`;
+
+const SVG = (inner, sw = 2) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`;
+const SYS = {
+  Shopify:  SVG('<path d="M3 9l1.5-5h15L21 9"/><path d="M3 9h18v2a3 3 0 0 1-6 0 3 3 0 0 1-6 0 3 3 0 0 1-6 0z"/><path d="M5 13v8h14v-8"/>'),
+  NetSuite: SVG('<path d="M4 4h12a2 2 0 0 1 2 2v14H6a2 2 0 0 1-2-2z"/><path d="M8 8h6M8 12h6M8 16h4"/>'),
+  Avectous: SVG('<path d="M3 10l9-6 9 6v10H3z"/><path d="M7 20v-6h10v6"/><path d="M7 17h10"/>')
+};
+const ARROW = SVG('<path d="M5 12h14M13 6l6 6-6 6"/>');
+const CLOCK = SVG('<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>');
+const CAL = SVG('<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>');
+const named = (from, to) => `<span class="sysi">${SYS[from]}${from}</span> &rarr; <span class="sysi">${SYS[to]}${to}</span>`;
+
+// Status: 0 missing = all caught up, 1-99 = needs attention, 100+ = problem.
+const STATUS = {
+  ok:   ['\u2705', 'All caught up'],
+  warn: ['\u26A0\uFE0F', 'Needs attention'],
+  bad:  ['\uD83D\uDEA8', 'Problem'],
+  wait: ['\u23F3', 'Waiting on Shopify access']
+};
+const statusBadge = k => `<span class="sd-status ${k}"><span class="emo" aria-hidden="true">${STATUS[k][0]}</span>${STATUS[k][1]}</span>`;
+
 const SYNC_HEADERS   = ['Order Number','NetSuite Internal ID','Order Date','Order Type','NetSuite Status','WMS Status','WMS Export Date'];
 const REASON_HEADERS = SYNC_HEADERS.concat(["Why it's missing", 'Avectous message', 'Avectous attempt']);
 const FULFIL_HEADERS = ['Order Number','NetSuite Internal ID','Avectous Ship Date','Order Date','NetSuite Status','WMS Status','Age'];
+const AGED_HEADERS   = ['Order Number','Order Date','Avectous Status','Order Type','Channel'];
 let current = null;
 
-const add = (a, b, k) => (a && a[k] || 0) + (b && b[k] || 0);
-function tone(pct){ return pct === null ? 'warn' : pct >= 99 ? 'ok' : pct >= 97 ? 'warn' : 'bad'; }
-function fmtDay(d){ if(!d) return '\u2014'; const t = new Date(d + 'T12:00:00'); return t.toLocaleDateString([], { weekday:'short', month:'numeric', day:'numeric' }); }
-
-function pendingCard(title, dir, lines, need){
-  return `<div class="ig-card warn"><div class="stripe"></div>
-    <h3>${title}<span class="sd-pending">${need}</span></h3>
-    <div class="ig-dir">${dir}</div>
-    <div class="ig-lines">${lines.map(([k, v]) => `<div class="ig-line"><span class="k">${k}</span><span class="v" style="color:var(--muted);">${v}</span></div>`).join('')}</div>
-    <div class="sd-note">This queue fills in once the dashboard has a read-only Shopify connection.</div>
+function pendingCard(from, to, rows){
+  return `<div class="sd-card pending">
+    ${statusBadge('wait')}
+    <h3>${named(from, to)}</h3>
+    <div class="sd-hero">
+      <div class="sd-stat"><div class="big">&mdash;</div><div class="cap">missing</div></div>
+      <div class="sd-stat"><div class="big">&mdash;</div><div class="cap">made it across</div></div>
+    </div>
+    <div class="sd-rows">${rows.map(k => `<div class="sd-row"><span>${k}</span><span class="v">&mdash;</span></div>`).join('')}</div>
+    <div class="note">Fills in once the dashboard has a read-only Shopify connection.</div>
   </div>`;
 }
 
-function queueCard({ title, dir, leftLabel, rightLabel, so, to, missingNote, exportId, extra }){
-  const total = add(so, to, 'total');
-  const matched = add(so, to, 'matched');
-  const missing = add(so, to, 'missing');
+function oldestDay(rows, col){
+  let min = null;
+  for(const r of rows || []){ const d = isoDay(r[col]); if(d && (!min || d < min)) min = d; }
+  return min;
+}
+
+function queueCard({ from, to, so, toq, leftLabel, rightLabel, exportId, reasons, prev, ageCol, ageWord, extra }){
+  const total = sum(so, toq, 'total');
+  const matched = sum(so, toq, 'matched');
+  const missing = sum(so, toq, 'missing');
   const pct = total ? (matched / total) * 100 : null;
-  return `<div class="ig-card ${tone(pct)}"><div class="stripe"></div>
-    <h3>${title}</h3>
-    <div class="ig-dir">${dir}</div>
-    <div class="ig-health"><span class="n">${pct === null ? '\u2014' : pct.toFixed(2) + '%'}</span><span class="lab">made it across</span></div>
-    <div class="ig-lines">
-      <div class="ig-line"><span class="k">${leftLabel}</span><span class="v">${fmt(total)}</span></div>
-      <div class="ig-line"><span class="k">${rightLabel}</span><span class="v">${fmt(matched)}</span></div>
-      <div class="ig-line"><span class="k">Missing</span><span class="v ${missing ? 'bad' : ''}">${fmt(missing)}</span></div>
+  const tone = !missing ? 'ok' : missing < 100 ? 'warn' : 'bad';
+  const pctTone = pct === null ? 'warn' : pct >= 99 ? '' : pct >= 97 ? 'warn' : 'bad';
+
+  let delta = '';
+  if(prev !== undefined && prev !== null){
+    const d = missing - prev;
+    delta = d > 0 ? `<div class="sd-delta up">&uarr; ${fmt(d)} more missing since last refresh</div>`
+          : d < 0 ? `<div class="sd-delta down">&darr; ${fmt(-d)} fewer missing since last refresh</div>`
+          : `<div class="sd-delta same">No change since last refresh</div>`;
+  }
+  const oldest = missing ? oldestDay([].concat(so && so.rows || [], toq && toq.rows || []), ageCol) : null;
+  const age = oldest !== null ? daysSince(oldest) : null;
+
+  return `<div class="sd-card">
+    ${statusBadge(tone)}
+    <h3>${named(from, to)}</h3>
+    <div class="sd-hero">
+      <div class="sd-stat miss ${missing ? '' : 'zero'}"><div class="big">${fmt(missing)}</div><div class="cap">missing</div></div>
+      <div class="sd-stat pct ${pctTone}"><div class="big">${pct === null ? '\u2014' : pct.toFixed(2) + '%'}</div><div class="cap">made it across</div></div>
     </div>
-    <div class="sd-split">Sales orders ${fmt(so && so.missing)} missing &middot; Transfer orders ${fmt(to && to.missing)} missing</div>
-    ${missing ? `<div class="ig-flag ${missingNote.mild ? 'mild' : ''}">${missingNote.text}</div>` : ''}
+    ${delta}
+    <div class="sd-rows">
+      <div class="sd-row"><span>${leftLabel}</span><span class="v">${fmt(total)}</span></div>
+      <div class="sd-row"><span>${rightLabel}</span><span class="v">${fmt(matched)}</span></div>
+    </div>
+    <div class="sd-split">
+      <div><div class="k">Sales orders missing</div><div class="n ${so && so.missing ? 'bad' : ''}">${fmt(so && so.missing)}</div></div>
+      <div><div class="k">Transfer orders missing</div><div class="n ${toq && toq.missing ? 'bad' : ''}">${fmt(toq && toq.missing)}</div></div>
+    </div>
+    ${reasons && reasons.length && missing ? `<div class="sd-why"><h4>Reasons:</h4>
+      ${reasons.map(([k, n]) => `<div class="r"><span>${escapeHtml(k)}</span><b>${fmt(n)}</b></div>`).join('')}</div>` : ''}
+    ${age !== null ? `<div class="sd-chip age">${CLOCK}<span>Oldest missing: <b>${plural(age, 'day')}</b> ${ageWord}</span></div>` : ''}
     ${extra || ''}
-    <div class="sd-actions">
-      <button class="ghost" type="button" data-export="${exportId}" ${missing ? '' : 'disabled'}>Export missing ${missing ? `(${fmt(missing)})` : ''}</button>
-    </div>
+    <div class="spacer"></div>
+    <button class="sd-export" type="button" data-export="${exportId}" ${missing ? '' : 'disabled'}>Export missing (${fmt(missing)})</button>
   </div>`;
 }
 
-function reasonsBlock(so, to){
+function agedBox(g){
+  if(!g) return '';
+  const oldest = daysSince(g.oldestDay);
+  return `<div class="aged">
+    <div class="top">${CLOCK}<span>In Avectous but not shipped yet</span></div>
+    <div class="nums">
+      <div><div class="v">${g.count ? plural(oldest, 'day') : '\u2014'}</div><div class="k">oldest unshipped order</div></div>
+      <div><div class="v">${fmt(g.count)}</div><div class="k">online orders placed before ${fmtDay(g.cutoff)}</div></div>
+    </div>
+    <div class="sub">Still open in Avectous though the warehouse has moved on to ${fmtDay(g.base)} orders.${(g.wholesale || []).length || (g.transfer || []).length ? ` Plus ${fmt((g.wholesale || []).length)} wholesale and ${fmt((g.transfer || []).length)} transfer orders in the export.` : ''}</div>
+    <button type="button" data-export="aged" ${g.count || (g.wholesale || []).length || (g.transfer || []).length ? '' : 'disabled'}>Export aged orders</button>
+  </div>`;
+}
+
+function reasonList(so, to){
   const counts = {};
   for(const a of [so, to]) for(const rc of (a && a.reasonCounts) || []) counts[rc.label] = (counts[rc.label] || 0) + rc.count;
-  const list = Object.entries(counts).sort((x, y) => y[1] - x[1]);
-  if(!list.length) return '';
-  return `<div class="sd-note" style="color:inherit;"><div style="font-weight:700; margin-bottom:2px;">Why they're missing, per Avectous</div>
-    ${list.map(([k, n]) => `<div class="ig-line" style="padding-left:0;"><span class="k">${escapeHtml(k)}</span><span class="v">${fmt(n)}</span></div>`).join('')}</div>`;
-}
-
-function warehouseBlock(w){
-  if(!w) return '';
-  return `<div class="sd-wh"><strong>Warehouse is shipping orders from ${fmtDay(w.orderDay)}.</strong>
-    On ${fmtDay(w.shipDay)}, ${Math.round(w.share * 100)}% of the ${fmt(w.shipped)} orders shipped were placed that day.</div>`;
+  return Object.entries(counts).sort((x, y) => y[1] - x[1]);
 }
 
 function render(){
+  document.getElementById('inPath').innerHTML = SYS.Shopify + ARROW + SYS.NetSuite + ARROW + SYS.Avectous;
+  document.getElementById('outPath').innerHTML = SYS.Avectous + ARROW + SYS.NetSuite + ARROW + SYS.Shopify;
   const a = current && current.audits;
+  const inc = document.getElementById('incoming');
+  const shp = document.getElementById('shipping');
   if(!a){
-    document.getElementById('incoming').innerHTML = '<div class="panel">No numbers yet. Run a refresh on Integrations Status &ndash; Orders.</div>';
-    document.getElementById('shipping').innerHTML = '';
+    inc.innerHTML = '<p class="sd-foot" style="grid-column:1/-1;">No numbers yet. Run a refresh on Integrations Status &ndash; Orders.</p>';
+    shp.innerHTML = '';
     return;
   }
-  document.getElementById('incoming').innerHTML =
-    pendingCard('Shopify &rarr; NetSuite', 'ORDERS SHOPIFY SENDS TO NETSUITE (CELIGO)',
-      [['Orders in Shopify', '\u2014'], ['Orders in NetSuite', '\u2014'], ['Missing', '\u2014']], 'Needs Shopify access') +
-    queueCard({
-      title: 'NetSuite &rarr; Avectous', dir: 'ORDERS NETSUITE SENDS TO THE WAREHOUSE',
-      leftLabel: 'Orders in NetSuite (should be in Avectous)', rightLabel: 'Orders in Avectous',
-      so: a.soSync, to: a.toSync, exportId: 'sync',
-      missingNote: { mild: true, text: 'NetSuite has these orders but Avectous doesn\u2019t. <strong>The warehouse can\u2019t ship what it doesn\u2019t have.</strong>' },
-      extra: reasonsBlock(a.soSync, a.toSync)
-    });
-  document.getElementById('shipping').innerHTML =
-    queueCard({
-      title: 'Avectous &rarr; NetSuite', dir: 'SHIPMENTS THE WAREHOUSE CONFIRMS BACK TO NETSUITE',
-      leftLabel: 'Fulfillments in Avectous (shipped)', rightLabel: 'Fulfillments in NetSuite',
-      so: a.soFulfil, to: a.toFulfil, exportId: 'fulfil',
-      missingNote: { mild: false, text: 'Avectous shipped these, but NetSuite has no fulfillment. <strong>The customer has the product; NetSuite can\u2019t invoice it.</strong>' },
-      extra: warehouseBlock(current.warehouseDay)
-    }) +
-    pendingCard('NetSuite &rarr; Shopify', 'FULFILLMENTS NETSUITE SENDS BACK TO SHOPIFY (CELIGO)',
-      [['Fulfillments in NetSuite', '\u2014'], ['Fulfillments in Shopify', '\u2014'], ['Missing in Shopify', '\u2014']], 'Needs Shopify access');
+  const prev = current.prevMissing || {};
+  const w = current.warehouseDay;
+  inc.innerHTML =
+    pendingCard('Shopify', 'NetSuite', ['Orders in Shopify', 'Orders in NetSuite']) +
+    queueCard({ from: 'NetSuite', to: 'Avectous', so: a.soSync, toq: a.toSync,
+      leftLabel: 'Orders in NetSuite', rightLabel: 'Orders in Avectous',
+      exportId: 'sync', reasons: reasonList(a.soSync, a.toSync), prev: prev.sync,
+      ageCol: 2, ageWord: 'since order date' });
+  shp.innerHTML =
+    queueCard({ from: 'Avectous', to: 'NetSuite', so: a.soFulfil, toq: a.toFulfil,
+      leftLabel: 'Shipped in Avectous', rightLabel: 'Recorded in NetSuite',
+      exportId: 'fulfil', prev: prev.fulfil, ageCol: 2, ageWord: 'since it shipped',
+      extra: (w && w.orderDay ? `<div class="sd-chip wh">${CAL}<span>Warehouse is shipping orders placed <b>${fmtDay(w.orderDay)}</b></span></div>` : '') + agedBox(current.agedOpen) }) +
+    pendingCard('NetSuite', 'Shopify', ['Fulfilled in NetSuite', 'Fulfilled in Shopify']);
 
-  document.querySelectorAll('[data-export]').forEach(b => b.addEventListener('click', ()=> exportMissing(b.dataset.export)));
+  document.querySelectorAll('[data-export]').forEach(b => b.addEventListener('click', ()=> exportList(b.dataset.export)));
 }
 
-function exportMissing(kind){
+function exportList(kind){
   const a = current.audits;
   const wb = XLSX.utils.book_new();
   const sheet = (headers, rows) => { const ws = XLSX.utils.aoa_to_sheet([headers].concat(rows || [])); ws['!cols'] = headers.map(()=>({ wch: 20 })); return ws; };
+  const day = new Date().toISOString().slice(0, 10).replace(/-/g, '');
   if(kind === 'sync'){
     const pick = rows => (rows || []).some(r => r.length > 7) ? REASON_HEADERS : SYNC_HEADERS;
     XLSX.utils.book_append_sheet(wb, sheet(pick(a.soSync.rows), a.soSync.rows), 'Sales orders');
     XLSX.utils.book_append_sheet(wb, sheet(pick(a.toSync.rows), a.toSync.rows), 'Transfer orders');
-  } else {
+    XLSX.writeFile(wb, `BYLT_NetSuite_to_Avectous_Missing_${day}.xlsx`);
+  } else if(kind === 'fulfil'){
     XLSX.utils.book_append_sheet(wb, sheet(FULFIL_HEADERS, a.soFulfil.rows), 'Sales orders');
     XLSX.utils.book_append_sheet(wb, sheet(FULFIL_HEADERS, a.toFulfil.rows), 'Transfer orders');
+    XLSX.writeFile(wb, `BYLT_Avectous_to_NetSuite_Missing_${day}.xlsx`);
+  } else if(kind === 'aged'){
+    const g = current.agedOpen;
+    XLSX.utils.book_append_sheet(wb, sheet(AGED_HEADERS, g.rows), 'Online orders');
+    XLSX.utils.book_append_sheet(wb, sheet(AGED_HEADERS, g.wholesale || []), 'Wholesale');
+    XLSX.utils.book_append_sheet(wb, sheet(AGED_HEADERS, g.transfer || []), 'Transfer orders');
+    XLSX.writeFile(wb, `BYLT_Aged_In_Avectous_${day}.xlsx`);
   }
-  const day = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-  XLSX.writeFile(wb, kind === 'sync' ? `BYLT_NetSuite_to_Avectous_Missing_${day}.xlsx` : `BYLT_Avectous_to_NetSuite_Missing_${day}.xlsx`);
+}
+
+async function loadLive(savedAt){
+  const el = document.getElementById('live');
+  try{
+    const res = await fetch('/api/refresh');
+    const s = await res.json();
+    if(!s.ok) throw 0;
+    const mins = savedAt ? Math.max(0, Math.round((Date.now() - Date.parse(savedAt)) / 60000)) : null;
+    const ago = mins === null ? '' : mins < 60 ? `${mins} min ago` : `${Math.round(mins / 60)} hr ago`;
+    el.innerHTML = s.paused
+      ? `<span class="live off"><i></i>Auto-refresh off</span>`
+      : `<span class="live on"><i></i>Auto-refresh on${ago ? ', updated ' + ago : ''}</span>`;
+  } catch(e){ el.innerHTML = ''; }
 }
 
 async function load(){
@@ -163,11 +333,13 @@ async function load(){
   const s = shared[INTEGRATIONS.id];
   current = s ? s.result : null;
   document.getElementById('asOf').textContent = s
-    ? `Last updated ${new Date(s.savedAt).toLocaleString()}${s.ranBy ? ' by ' + s.ranBy : ''}`
+    ? `Last updated ${new Date(s.savedAt).toLocaleString([], { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' })}${s.ranBy ? ' by ' + s.ranBy : ''}`
     : 'No numbers yet.';
   render();
+  loadLive(s && s.savedAt);
 }
 load();
+setInterval(load, 5 * 60 * 1000);
 </script>
 </body>
 </html>

@@ -465,6 +465,9 @@ async function stepReasons(ctx, step, cur) {
   for (const m of cur.list) if (cache[m.order]) keep[m.order] = cache[m.order];
   await store.setJSON('reasons-cache', keep);
   compute.applyReasons(parked.result, reasons);
+  // Keep the previous run's missing counts so the page can show the change.
+  const prev = await results.get(parked.id, { type: 'json' }).catch(() => null);
+  if (prev && prev.result) compute.attachPrev(parked.result, prev.result, prev.savedAt);
   await results.setJSON(parked.id, { result: parked.result, savedAt: new Date().toISOString(), ranBy: 'Auto-refresh' });
   await store.delete('work:integrations').catch(() => {});
   ctx.note(`Integrations Status updated (${cur.todo.length} missing orders checked with Avectous)`);
