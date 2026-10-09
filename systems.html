@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>BYLT / Systems</title>
+<link rel="stylesheet" href="style.css">
+<script src="auth-check.js?v=67"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  .sd-sec{ font-size:12px; font-weight:800; letter-spacing:0.6px; color:var(--muted); margin:6px 0 10px; }
+  .sd-pending{ font-size:11px; font-weight:700; padding:2px 8px; border-radius:10px; background:#fdf6ec; color:#7a4d06; margin-left:8px; vertical-align:middle; }
+  .sd-split{ font-size:11.5px; color:var(--muted); padding-left:8px; margin-top:6px; }
+  .sd-actions{ margin-top:12px; padding-left:8px; display:flex; gap:8px; flex-wrap:wrap; }
+  .sd-note{ font-size:12px; color:var(--muted); padding-left:8px; margin-top:10px; line-height:1.5; }
+  .sd-wh{ margin-top:11px; margin-left:8px; background:#eef4fb; border:1px solid #cfe0f3; border-radius:7px; padding:9px 11px; font-size:12.5px; color:#1d3b5e; line-height:1.5; }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">BYLT</div>
+  <nav>
+    <a href="systems.html" class="current">Systems</a>
+    <a href="index.html">Order Status</a>
+    <a href="integrations.html">Integrations Status &ndash; Orders</a>
+    <a href="integration-health.html">Inventory &amp; Shipping</a>
+    <a href="load-data.html">Load Data</a>
+    <a href="#" id="logoutLink" style="margin-left:24px;">Log out</a>
+  </nav>
+</header>
+
+<div class="crumbline" style="display:flex; justify-content:space-between; align-items:flex-end; gap:16px; flex-wrap:wrap;">
+  <div>
+    <h1>Systems Dashboard</h1>
+    <div class="path" id="asOf">Loading&hellip;</div>
+  </div>
+  <button class="ghost" id="refreshBtn" type="button">Refresh</button>
+</div>
+
+<main>
+  <div class="sd-sec">INCOMING ORDERS</div>
+  <div class="ig-grid" id="incoming"></div>
+
+  <div class="sd-sec">SHIP CONFIRMATIONS</div>
+  <div class="ig-grid" id="shipping"></div>
+
+  <div class="sub" style="margin-top:4px;">
+    Numbers come from the same refresh as Integrations Status &ndash; Orders. Sales and transfer orders are added together here; the Integrations page has them separately.
+  </div>
+</main>
+
+<script src="app.js?v=68"></script>
+<script>
+document.getElementById('logoutLink').addEventListener('click', e=>{ e.preventDefault(); logout(); });
+document.getElementById('refreshBtn').addEventListener('click', ()=> load());
+
+const fmt = n => (n === null || n === undefined || isNaN(n)) ? '\u2014' : Number(n).toLocaleString();
+const SYNC_HEADERS   = ['Order Number','NetSuite Internal ID','Order Date','Order Type','NetSuite Status','WMS Status','WMS Export Date'];
+const REASON_HEADERS = SYNC_HEADERS.concat(["Why it's missing", 'Avectous message', 'Avectous attempt']);
+const FULFIL_HEADERS = ['Order Number','NetSuite Internal ID','Avectous Ship Date','Order Date','NetSuite Status','WMS Status','Age'];
+let current = null;
+
+const add = (a, b, k) => (a && a[k] || 0) + (b && b[k] || 0);
+function tone(pct){ return pct === null ? 'warn' : pct >= 99 ? 'ok' : pct >= 97 ? 'warn' : 'bad'; }
+function fmtDay(d){ if(!d) return '\u2014'; const t = new Date(d + 'T12:00:00'); return t.toLocaleDateString([], { weekday:'short', month:'numeric', day:'numeric' }); }
+
+function pendingCard(title, dir, lines, need){
+  return `<div class="ig-card warn"><div class="stripe"></div>
+    <h3>${title}<span class="sd-pending">${need}</span></h3>
+    <div class="ig-dir">${dir}</div>
+    <div class="ig-lines">${lines.map(([k, v]) => `<div class="ig-line"><span class="k">${k}</span><span class="v" style="color:var(--muted);">${v}</span></div>`).join('')}</div>
+    <div class="sd-note">This queue fills in once the dashboard has a read-only Shopify connection.</div>
+  </div>`;
+}
+
+function queueCard({ title, dir, leftLabel, rightLabel, so, to, missingNote, exportId, extra }){
+  const total = add(so, to, 'total');
+  const matched = add(so, to, 'matched');
+  const missing = add(so, to, 'missing');
+  const pct = total ? (matched / total) * 100 : null;
+  return `<div class="ig-card ${tone(pct)}"><div class="stripe"></div>
+    <h3>${title}</h3>
+    <div class="ig-dir">${dir}</div>
+    <div class="ig-health"><span class="n">${pct === null ? '\u2014' : pct.toFixed(2) + '%'}</span><span class="lab">made it across</span></div>
+    <div class="ig-lines">
+      <div class="ig-line"><span class="k">${leftLabel}</span><span class="v">${fmt(total)}</span></div>
+      <div class="ig-line"><span class="k">${rightLabel}</span><span class="v">${fmt(matched)}</span></div>
+      <div class="ig-line"><span class="k">Missing</span><span class="v ${missing ? 'bad' : ''}">${fmt(missing)}</span></div>
+    </div>
+    <div class="sd-split">Sales orders ${fmt(so && so.missing)} missing &middot; Transfer orders ${fmt(to && to.missing)} missing</div>
+    ${missing ? `<div class="ig-flag ${missingNote.mild ? 'mild' : ''}">${missingNote.text}</div>` : ''}
+    ${extra || ''}
+    <div class="sd-actions">
+      <button class="ghost" type="button" data-export="${exportId}" ${missing ? '' : 'disabled'}>Export missing ${missing ? `(${fmt(missing)})` : ''}</button>
+    </div>
+  </div>`;
+}
+
+function reasonsBlock(so, to){
+  const counts = {};
+  for(const a of [so, to]) for(const rc of (a && a.reasonCounts) || []) counts[rc.label] = (counts[rc.label] || 0) + rc.count;
+  const list = Object.entries(counts).sort((x, y) => y[1] - x[1]);
+  if(!list.length) return '';
+  return `<div class="sd-note" style="color:inherit;"><div style="font-weight:700; margin-bottom:2px;">Why they're missing, per Avectous</div>
+    ${list.map(([k, n]) => `<div class="ig-line" style="padding-left:0;"><span class="k">${escapeHtml(k)}</span><span class="v">${fmt(n)}</span></div>`).join('')}</div>`;
+}
+
+function warehouseBlock(w){
+  if(!w) return '';
+  return `<div class="sd-wh"><strong>Warehouse is shipping orders from ${fmtDay(w.orderDay)}.</strong>
+    On ${fmtDay(w.shipDay)}, ${Math.round(w.share * 100)}% of the ${fmt(w.shipped)} orders shipped were placed that day.</div>`;
+}
+
+function render(){
+  const a = current && current.audits;
+  if(!a){
+    document.getElementById('incoming').innerHTML = '<div class="panel">No numbers yet. Run a refresh on Integrations Status &ndash; Orders.</div>';
+    document.getElementById('shipping').innerHTML = '';
+    return;
+  }
+  document.getElementById('incoming').innerHTML =
+    pendingCard('Shopify &rarr; NetSuite', 'ORDERS SHOPIFY SENDS TO NETSUITE (CELIGO)',
+      [['Orders in Shopify', '\u2014'], ['Orders in NetSuite', '\u2014'], ['Missing', '\u2014']], 'Needs Shopify access') +
+    queueCard({
+      title: 'NetSuite &rarr; Avectous', dir: 'ORDERS NETSUITE SENDS TO THE WAREHOUSE',
+      leftLabel: 'Orders in NetSuite (should be in Avectous)', rightLabel: 'Orders in Avectous',
+      so: a.soSync, to: a.toSync, exportId: 'sync',
+      missingNote: { mild: true, text: 'NetSuite has these orders but Avectous doesn\u2019t. <strong>The warehouse can\u2019t ship what it doesn\u2019t have.</strong>' },
+      extra: reasonsBlock(a.soSync, a.toSync)
+    });
+  document.getElementById('shipping').innerHTML =
+    queueCard({
+      title: 'Avectous &rarr; NetSuite', dir: 'SHIPMENTS THE WAREHOUSE CONFIRMS BACK TO NETSUITE',
+      leftLabel: 'Fulfillments in Avectous (shipped)', rightLabel: 'Fulfillments in NetSuite',
+      so: a.soFulfil, to: a.toFulfil, exportId: 'fulfil',
+      missingNote: { mild: false, text: 'Avectous shipped these, but NetSuite has no fulfillment. <strong>The customer has the product; NetSuite can\u2019t invoice it.</strong>' },
+      extra: warehouseBlock(current.warehouseDay)
+    }) +
+    pendingCard('NetSuite &rarr; Shopify', 'FULFILLMENTS NETSUITE SENDS BACK TO SHOPIFY (CELIGO)',
+      [['Fulfillments in NetSuite', '\u2014'], ['Fulfillments in Shopify', '\u2014'], ['Missing in Shopify', '\u2014']], 'Needs Shopify access');
+
+  document.querySelectorAll('[data-export]').forEach(b => b.addEventListener('click', ()=> exportMissing(b.dataset.export)));
+}
+
+function exportMissing(kind){
+  const a = current.audits;
+  const wb = XLSX.utils.book_new();
+  const sheet = (headers, rows) => { const ws = XLSX.utils.aoa_to_sheet([headers].concat(rows || [])); ws['!cols'] = headers.map(()=>({ wch: 20 })); return ws; };
+  if(kind === 'sync'){
+    const pick = rows => (rows || []).some(r => r.length > 7) ? REASON_HEADERS : SYNC_HEADERS;
+    XLSX.utils.book_append_sheet(wb, sheet(pick(a.soSync.rows), a.soSync.rows), 'Sales orders');
+    XLSX.utils.book_append_sheet(wb, sheet(pick(a.toSync.rows), a.toSync.rows), 'Transfer orders');
+  } else {
+    XLSX.utils.book_append_sheet(wb, sheet(FULFIL_HEADERS, a.soFulfil.rows), 'Sales orders');
+    XLSX.utils.book_append_sheet(wb, sheet(FULFIL_HEADERS, a.toFulfil.rows), 'Transfer orders');
+  }
+  const day = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  XLSX.writeFile(wb, kind === 'sync' ? `BYLT_NetSuite_to_Avectous_Missing_${day}.xlsx` : `BYLT_Avectous_to_NetSuite_Missing_${day}.xlsx`);
+}
+
+async function load(){
+  const shared = await loadSharedResults();
+  const s = shared[INTEGRATIONS.id];
+  current = s ? s.result : null;
+  document.getElementById('asOf').textContent = s
+    ? `Last updated ${new Date(s.savedAt).toLocaleString()}${s.ranBy ? ' by ' + s.ranBy : ''}`
+    : 'No numbers yet.';
+  render();
+}
+load();
+</script>
+</body>
+</html>

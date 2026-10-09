@@ -480,3 +480,20 @@ from it. Exact trigger not yet confirmed. Now:
 - Before publishing, row counts are compared with the last good run; a drop of
   more than 10% blocks publishing and queues a full rebuild.
 - Page has a **Rebuild** button (full pull) and a **Recent activity** log.
+
+## Systems page (systems.html, Oct 9)
+One page, four queues, from the same saved Integrations result:
+- Incoming: Shopify -> NetSuite (placeholder until Shopify access), NetSuite ->
+  Avectous (sync audit, SO+TO added together, with Avectous's reasons).
+- Ship confirmations: Avectous -> NetSuite (fulfillment audit, plus "Warehouse
+  is shipping orders from <date>"), NetSuite -> Shopify (placeholder).
+- Each live queue has an Export missing button (Excel, sales and transfer sheets).
+"Warehouse is shipping orders from": on the most recent ship day in the Avectous
+shipments, the order date most of that day's orders were placed on
+(`computeWarehouseDay` in app.js, saved as `warehouseDay` on the result).
+Left out on purpose: missing cost / ship method.
+- Oct 9 PM: quick refreshes kept finding the saved NetSuite copy "unusable" and
+  pulling in full (numbers correct, just slow). The log now says exactly why
+  (no saved copy / no id column / missing piece N / row count mismatch), pieces
+  are read in small batches with one retry, and `/api/refresh?inspect=1` shows
+  each saved copy's rows, columns, pieces and any missing pieces.

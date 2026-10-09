@@ -50,14 +50,23 @@ const CHUNK = 5000;
 async function readTable(store, name) {
   const man = await store.get(`snap:${name}`, { type: 'json' });
   if (!man) return null;
-  const parts = await Promise.all(man.chunks.map(k => store.get(k, { type: 'json' })));
-  const rows = [];
-  for (const p of parts) {
-    // A missing piece means the saved copy can't be trusted; never use part of it.
-    if (!p) throw new Error(`Saved copy "${name}" is incomplete`);
-    rows.push(...p);
+  // Read in small batches, retrying a piece that comes back empty once.
+  const parts = [];
+  for (let i = 0; i < man.chunks.length; i += 4) {
+    const batch = man.chunks.slice(i, i + 4);
+    parts.push(...await Promise.all(batch.map(async k => {
+      let p = await store.get(k, { type: 'json' });
+      if (!p) { await new Promise(r => setTimeout(r, 700)); p = await store.get(k, { type: 'json' }); }
+      return p;
+    })));
   }
-  if (man.count != null && rows.length !== man.count) throw new Error(`Saved copy "${name}" is incomplete`);
+  const rows = [];
+  for (let i = 0; i < parts.length; i++) {
+    // A missing piece means the saved copy can't be trusted; never use part of it.
+    if (!parts[i]) throw new Error(`saved copy "${name}" is missing piece ${i + 1} of ${parts.length}`);
+    rows.push(...parts[i]);
+  }
+  if (man.count != null && rows.length !== man.count) throw new Error(`saved copy "${name}" has ${rows.length} rows, expected ${man.count}`);
   return { headers: man.headers, rows, savedAt: man.savedAt };
 }
 
@@ -156,14 +165,18 @@ async function stepNs(ctx, step, cur) {
     const { headers, objs } = await readWork(store, key, cur.pages);
     let outHeaders, outRows;
     if (step.incremental) {
-      let old = null;
-      try { old = await readTable(store, key); } catch (err) { ctx.note(err.message); }
-      if (!old || !old.headers.includes('id')) {
+      let old = null, why = '';
+      try {
+        old = await readTable(store, key);
+        if (!old) why = `no saved copy found (snap:${key} missing)`;
+        else if (!old.headers.includes('id')) why = `saved copy has no id column (${old.headers.length} columns: ${old.headers.slice(0, 6).join(', ')}...)`;
+      } catch (err) { why = err.message; }
+      if (why) {
         // No trustworthy saved copy to add changes to: pull this search in full instead.
         await clearWork(store, key, cur.pages);
         step.incremental = false;
         for (const k of Object.keys(cur)) delete cur[k];
-        ctx.note(`NetSuite ${step.source}: saved copy unusable, pulling the whole search instead`);
+        ctx.note(`NetSuite ${step.source}: saved copy unusable (${why}); pulling the whole search instead`);
         return false;
       }
       const changed = new Set(objs.map(o => String(o.id)));
@@ -237,13 +250,13 @@ async function stepAvo(ctx, step, cur) {
     let rows;
     st.leftOpen = [];
     if (step.incremental) {
-      let old = null;
-      try { old = await readTable(store, 'avo'); } catch (err) { ctx.note(err.message); }
+      let old = null, why = '';
+      try { old = await readTable(store, 'avo'); if (!old) why = 'no saved copy found'; } catch (err) { why = err.message; }
       if (!old) {
         await clearWork(store, 'avo', cur.pages);
         step.incremental = false;
         for (const k of Object.keys(cur)) delete cur[k];
-        ctx.note('Avectous orders: saved copy unusable, pulling the whole report instead');
+        ctx.note(`Avectous orders: saved copy unusable (${why}), pulling the whole report instead`);
         return false;
       }
       const map = new Map();
@@ -312,13 +325,13 @@ async function stepShp(ctx, step, cur) {
     const fresh = objs.map(o => pick(o, SHP_KEEP));
     let rows;
     if (step.incremental) {
-      let old = null;
-      try { old = await readTable(store, 'shp'); } catch (err) { ctx.note(err.message); }
+      let old = null, why = '';
+      try { old = await readTable(store, 'shp'); if (!old) why = 'no saved copy found'; } catch (err) { why = err.message; }
       if (!old) {
         await clearWork(store, 'shp', cur.pages);
         step.incremental = false;
         for (const k of Object.keys(cur)) delete cur[k];
-        ctx.note('Avectous shipments: saved copy unusable, pulling every order date instead');
+        ctx.note(`Avectous shipments: saved copy unusable (${why}), pulling every order date instead`);
         return false;
       }
       const days = new Set(cur.days);
@@ -540,4 +553,20 @@ export async function request(store, action) {
   else if (action === 'cancel') { st.status = 'idle'; st.steps = []; st.cursor = null; st.requested = null; st.progress = ''; }
   await putState(store, st);
   return st;
+}
+
+
+// What's saved, for troubleshooting (/api/refresh?inspect=1).
+export async function inspect(store) {
+  const out = {};
+  for (const name of ['ns-so', 'ns-to', 'avo', 'shp']) {
+    const man = await store.get(`snap:${name}`, { type: 'json' });
+    if (!man) { out[name] = 'no saved copy'; continue; }
+    const present = await Promise.all(man.chunks.map(k => store.getMetadata(k).then(m => !!m).catch(() => false)));
+    out[name] = {
+      rows: man.count, savedAt: man.savedAt, columns: man.headers.length, hasId: man.headers.includes('id'),
+      pieces: man.chunks.length, missingPieces: present.filter(x => !x).length
+    };
+  }
+  return out;
 }

@@ -3,7 +3,7 @@
 //   POST /api/refresh {action}       -> start | pause | now | full | cancel
 import { getStore } from '@netlify/blobs';
 import { isAuthorized, getSecret } from './lib/auth.mjs';
-import { getState, request } from './lib/refresh-engine.mjs';
+import { getState, request, inspect } from './lib/refresh-engine.mjs';
 
 const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
@@ -22,7 +22,10 @@ function summary(st) {
 export default async (req) => {
   if (!isAuthorized(req, getSecret())) return json(401, { ok: false, error: 'Not signed in. Log out and back in.' });
   const store = getStore({ name: 'bylt-refresh', consistency: 'strong' });
-  if (req.method === 'GET') return json(200, summary(await getState(store)));
+  if (req.method === 'GET') {
+    if (new URL(req.url).searchParams.get('inspect')) return json(200, { ok: true, saved: await inspect(store) });
+    return json(200, summary(await getState(store)));
+  }
   if (req.method === 'POST') {
     let body = {};
     try { body = await req.json(); } catch {}

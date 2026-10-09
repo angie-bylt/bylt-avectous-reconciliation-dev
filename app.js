@@ -2263,3 +2263,36 @@ function syncMissingOrders(result){
   }
   return out;
 }
+
+
+// ---------- Which order date the warehouse is shipping from ----------
+// From the Avectous shipments: take the most recent ship day, and find the
+// order date most of that day's shipments were placed on. Stragglers (a few
+// old orders shipping late) don't move it; the bulk of the day's work does.
+function computeWarehouseDay(shipInput){
+  const data = mergeSheets(shipInput);
+  if(!data || !data.rows || !data.rows.length) return null;
+  const shipCol = ['ShipDate','RecordDate','LastShipDate'].map(t => guessColumn(data.headers, t)).find(Boolean);
+  const orderCol = guessColumn(data.headers, 'OrderDate');
+  const keyCol = guessColumn(data.headers, 'OrderNumber');
+  if(!shipCol || !orderCol) return null;
+  const today = isoToday();
+  let lastShip = null;
+  for(const r of data.rows){
+    const d = isoDay(r[shipCol]);
+    if(d && d <= today && (!lastShip || d > lastShip)) lastShip = d;
+  }
+  if(!lastShip) return null;
+  const byOrderDay = new Map();
+  const orders = new Set();
+  for(const r of data.rows){
+    if(isoDay(r[shipCol]) !== lastShip) continue;
+    const k = keyCol ? String(r[keyCol]) : null;
+    if(k){ if(orders.has(k)) continue; orders.add(k); }
+    const od = isoDay(r[orderCol]);
+    if(od) byOrderDay.set(od, (byOrderDay.get(od) || 0) + 1);
+  }
+  let top = null, topCount = 0, total = 0;
+  for(const [d, n] of byOrderDay){ total += n; if(n > topCount){ top = d; topCount = n; } }
+  return top ? { shipDay: lastShip, orderDay: top, share: total ? topCount / total : 0, shipped: total } : null;
+}
