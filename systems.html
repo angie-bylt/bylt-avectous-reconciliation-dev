@@ -93,6 +93,10 @@
   .sd-card.pending .sd-stat .big{ font-size:22px; }
   .sd-card.pending .sd-row .v{ color:#9aa4b2; }
   .sd-card.pending .note{ margin-top:12px; font-size:12.5px; color:var(--muted); }
+  .shop-src{ margin-top:10px; font-size:12px; color:var(--muted); display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .shop-src button, .sd-card.pending .up{ border:1px solid #c9d1dc; background:#fff; color:var(--navy); border-radius:20px; padding:5px 12px; font-size:12.5px; font-weight:700; cursor:pointer; }
+  .sd-card.pending .up{ margin-top:12px; width:100%; padding:8px; }
+  .up-status{ font-size:12px; color:var(--muted); margin-top:6px; }
   .sd-foot{ margin-top:20px; text-align:center; font-size:12.5px; color:#2c3a4d; }
 
   @media (max-width:1240px){ .sd-sections{ grid-template-columns:1fr; } }
@@ -121,6 +125,7 @@
   <button class="ghost" id="refreshBtn" type="button">Refresh</button>
 </div>
 
+<input type="file" id="shopFile" accept=".csv" multiple hidden>
 <main class="sd-main">
   <div class="sd-sections">
     <section class="sd-sec" aria-labelledby="inTitle">
@@ -189,7 +194,9 @@ function pendingCard(from, to, rows){
       <div class="sd-stat"><div class="big">&mdash;</div><div class="cap">made it across</div></div>
     </div>
     <div class="sd-rows">${rows.map(k => `<div class="sd-row"><span>${k}</span><span class="v">&mdash;</span></div>`).join('')}</div>
-    <div class="note">Fills in once the dashboard has a read-only Shopify connection.</div>
+    <div class="note">Fills in from a Shopify export until the read-only Shopify connection is set up.</div>
+    <button class="up" type="button" data-upload>Upload Shopify export</button>
+    <div class="up-status" data-upstatus></div>
   </div>`;
 }
 
@@ -199,7 +206,7 @@ function oldestDay(rows, col){
   return min;
 }
 
-function queueCard({ from, to, so, toq, leftLabel, rightLabel, exportId, reasons, prev, ageCol, ageWord, extra }){
+function queueCard({ from, to, so, toq, leftLabel, rightLabel, exportId, reasons, prev, ageCol, ageWord, extra, splitLabels }){
   const total = sum(so, toq, 'total');
   const matched = sum(so, toq, 'matched');
   const missing = sum(so, toq, 'missing');
@@ -230,8 +237,8 @@ function queueCard({ from, to, so, toq, leftLabel, rightLabel, exportId, reasons
       <div class="sd-row"><span>${rightLabel}</span><span class="v">${fmt(matched)}</span></div>
     </div>
     <div class="sd-split">
-      <div><div class="k">Sales orders missing</div><div class="n ${so && so.missing ? 'bad' : ''}">${fmt(so && so.missing)}</div></div>
-      <div><div class="k">Transfer orders missing</div><div class="n ${toq && toq.missing ? 'bad' : ''}">${fmt(toq && toq.missing)}</div></div>
+      <div><div class="k">${(splitLabels || [])[0] || "Sales orders missing"}</div><div class="n ${so && so.missing ? 'bad' : ''}">${fmt(so && so.missing)}</div></div>
+      <div><div class="k">${(splitLabels || [])[1] || "Transfer orders missing"}</div><div class="n ${toq && toq.missing ? 'bad' : ''}">${fmt(toq && toq.missing)}</div></div>
     </div>
     ${reasons && reasons.length && missing ? `<div class="sd-why"><h4>Reasons:</h4>
       ${reasons.map(([k, n]) => `<div class="r"><span>${escapeHtml(k)}</span><b>${fmt(n)}</b></div>`).join('')}</div>` : ''}
@@ -275,8 +282,13 @@ function render(){
   }
   const prev = current.prevMissing || {};
   const w = current.warehouseDay;
+  const sh = current.shopify && !current.shopify.error ? current.shopify : null;
+  const shopSrc = sh ? `<div class="shop-src"><span>From Shopify export, orders through ${fmtDay(sh.through)}</span><button type="button" data-upload>Upload new export</button><span data-upstatus></span></div>` : '';
   inc.innerHTML =
-    pendingCard('Shopify', 'NetSuite', ['Orders in Shopify', 'Orders in NetSuite']) +
+    (sh ? queueCard({ from: 'Shopify', to: 'NetSuite', so: sh.inbound.online, toq: sh.inbound.other,
+        leftLabel: 'Orders in Shopify', rightLabel: 'Orders in NetSuite', exportId: 'shopIn',
+        splitLabels: ['Web orders missing', 'Exchanges & POS missing'], ageCol: 1, ageWord: 'since order date', extra: shopSrc })
+      : pendingCard('Shopify', 'NetSuite', ['Orders in Shopify', 'Orders in NetSuite'])) +
     queueCard({ from: 'NetSuite', to: 'Avectous', so: a.soSync, toq: a.toSync,
       leftLabel: 'Orders in NetSuite', rightLabel: 'Orders in Avectous',
       exportId: 'sync', reasons: reasonList(a.soSync, a.toSync), prev: prev.sync,
@@ -286,9 +298,13 @@ function render(){
       leftLabel: 'Shipped in Avectous', rightLabel: 'Recorded in NetSuite',
       exportId: 'fulfil', prev: prev.fulfil, ageCol: 2, ageWord: 'since it shipped',
       extra: (w && w.orderDay ? `<div class="sd-chip wh">${CAL}<span>Warehouse is shipping orders placed <b>${fmtDay(w.orderDay)}</b></span></div>` : '') + agedBox(current.agedOpen) }) +
-    pendingCard('NetSuite', 'Shopify', ['Fulfilled in NetSuite', 'Fulfilled in Shopify']);
+    (sh ? queueCard({ from: 'NetSuite', to: 'Shopify', so: sh.outbound.online, toq: sh.outbound.other,
+        leftLabel: 'Fulfilled in NetSuite', rightLabel: 'Fulfilled in Shopify', exportId: 'shopOut',
+        splitLabels: ['Web orders missing', 'Exchanges & POS missing'], ageCol: 2, ageWord: 'since order date', extra: shopSrc })
+      : pendingCard('NetSuite', 'Shopify', ['Fulfilled in NetSuite', 'Fulfilled in Shopify']));
 
   document.querySelectorAll('[data-export]').forEach(b => b.addEventListener('click', ()=> exportList(b.dataset.export)));
+  document.querySelectorAll('[data-upload]').forEach(b => b.addEventListener('click', ()=> document.getElementById('shopFile').click()));
 }
 
 function exportList(kind){
@@ -305,6 +321,14 @@ function exportList(kind){
     XLSX.utils.book_append_sheet(wb, sheet(FULFIL_HEADERS, a.soFulfil.rows), 'Sales orders');
     XLSX.utils.book_append_sheet(wb, sheet(FULFIL_HEADERS, a.toFulfil.rows), 'Transfer orders');
     XLSX.writeFile(wb, `BYLT_Avectous_to_NetSuite_Missing_${day}.xlsx`);
+  } else if(kind === 'shopIn' || kind === 'shopOut'){
+    const sh = current.shopify;
+    const g = kind === 'shopIn' ? sh.inbound : sh.outbound;
+    const H = kind === 'shopIn' ? ['Order Number','Order Date','Shopify Fulfillment Status']
+                                : ['Order Number','NetSuite Internal ID','Order Date','NetSuite Status','Shopify Fulfillment Status'];
+    XLSX.utils.book_append_sheet(wb, sheet(H, g.online.rows), 'Web orders');
+    XLSX.utils.book_append_sheet(wb, sheet(H, g.other.rows), 'Exchanges & POS');
+    XLSX.writeFile(wb, kind === 'shopIn' ? `BYLT_Shopify_to_NetSuite_Missing_${day}.xlsx` : `BYLT_NetSuite_to_Shopify_Missing_${day}.xlsx`);
   } else if(kind === 'aged'){
     const g = current.agedOpen;
     XLSX.utils.book_append_sheet(wb, sheet(AGED_HEADERS, g.rows), 'Online orders');
@@ -313,6 +337,80 @@ function exportList(kind){
     XLSX.writeFile(wb, `BYLT_Aged_In_Avectous_${day}.xlsx`);
   }
 }
+
+// ---------- Shopify export upload ----------
+// Shopify's report lists every order against every day, so most rows are
+// blanks (Orders = 0). Read the file a chunk at a time and keep only real
+// orders: name, the day it was placed, and its fulfillment status.
+function splitCsv(line){
+  const out = []; let cur = '', q = false;
+  for(let i = 0; i < line.length; i++){
+    const c = line[i];
+    if(q){ if(c === '"'){ if(line[i + 1] === '"'){ cur += '"'; i++; } else q = false; } else cur += c; }
+    else if(c === '"') q = true;
+    else if(c === ','){ out.push(cur); cur = ''; }
+    else cur += c;
+  }
+  out.push(cur); return out;
+}
+async function readShopifyExport(file, keep, onProgress){
+  const reader = file.stream().pipeThrough(new TextDecoderStream()).getReader();
+  let buf = '', idx = null, done = 0;
+  const handle = line => {
+    if(!line) return;
+    const f = splitCsv(line.replace(/\r$/, ''));
+    if(!idx){
+      const h = f.map(x => x.trim().toLowerCase());
+      idx = { name: h.indexOf('order name'), day: h.indexOf('day'), status: h.indexOf('order fulfillment status'), orders: h.indexOf('orders') };
+      if(idx.name < 0 || idx.status < 0) throw new Error(`${file.name} is missing an "Order name" or "Order fulfillment status" column.`);
+      return;
+    }
+    if(idx.orders >= 0 && Number(f[idx.orders]) < 1) return;
+    const name = (f[idx.name] || '').trim();
+    if(!name) return;
+    keep.set(name, [name, (f[idx.day] || '').trim().slice(0, 10), (f[idx.status] || '').trim().toLowerCase()]);
+  };
+  for(;;){
+    const { value, done: end } = await reader.read();
+    if(end) break;
+    done += value.length;
+    buf += value;
+    const lines = buf.split('\n');
+    buf = lines.pop();
+    for(const l of lines) handle(l);
+    onProgress(done);
+  }
+  handle(buf);
+}
+
+document.getElementById('shopFile').addEventListener('change', async e => {
+  const files = [...e.target.files];
+  e.target.value = '';
+  if(!files.length) return;
+  const say = t => document.querySelectorAll('[data-upstatus]').forEach(el => el.textContent = t);
+  const keep = new Map();
+  const totalBytes = files.reduce((n, f) => n + f.size, 0);
+  let before = 0;
+  try{
+    for(const f of files){
+      await readShopifyExport(f, keep, d => say(`Reading ${f.name}\u2026 ${Math.min(99, Math.round(((before + d) / totalBytes) * 100))}%`));
+      before += f.size;
+    }
+    if(!keep.size) throw new Error('No orders found. Is this the Shopify orders report with "Order name" and "Order fulfillment status"?');
+    say(`Matching ${keep.size.toLocaleString()} Shopify orders against NetSuite\u2026`);
+    // Compact: orders grouped under their day, status as one letter (f/u/p/r).
+    const byDay = new Map();
+    for(const [name, d, st] of keep.values()){ if(!byDay.has(d)) byDay.set(d, []); byDay.get(d).push(name + '\t' + (st[0] || 'u')); }
+    const lines = [...byDay].map(([d, list]) => '@' + d + '\n' + list.join('\n')).join('\n');
+    const res = await fetch('/api/shopify', { method:'POST', headers:{ 'content-type':'application/json' }, body: JSON.stringify({ lines, files: files.map(f => f.name) }) });
+    const data = await res.json();
+    if(!data.ok) throw new Error(data.error || 'Upload failed');
+    say(`${data.count.toLocaleString()} orders through ${fmtDay(data.through)}. ${data.note}`);
+    await load();
+  } catch(err){
+    say(`Upload stopped: ${err.message}`);
+  }
+});
 
 async function loadLive(savedAt){
   const el = document.getElementById('live');

@@ -2358,3 +2358,58 @@ function attachPrevMissing(result, prev, prevSavedAt){
   result.prevMissing = { sync: m(a.soSync) + m(a.toSync), fulfil: m(a.soFulfil) + m(a.toFulfil), savedAt: prevSavedAt || null };
   return result;
 }
+
+
+// ---------- Shopify vs NetSuite ----------
+// shopRows: [name, day (YYYY-MM-DD), status] from the Shopify export
+// (status: fulfilled / unfulfilled / partial / restocked).
+// Inbound: Shopify orders that never reached NetSuite (matched on PO/Check Number).
+// Outbound: orders NetSuite shows shipped that Shopify still shows unfulfilled.
+// Rules carried over from the Order Fulfillment Audit Tool: skip today's orders,
+// and on Mondays skip the weekend too, since those may still be syncing.
+function shopifyGroup(name){
+  if(/^EXC-/i.test(name)) return 'other';        // Loop exchanges
+  if(/^#\d+-\d+$/.test(name)) return 'other';     // POS
+  return 'online';
+}
+function computeShopifyAudit(soData, shopRows, meta){
+  if(!soData || !shopRows || !shopRows.length) return null;
+  const ns = nsOrderIndex(mergeSheets(soData), INTEGRATIONS.sources.so.keyField);
+  if(ns.error) return { error: ns.error };
+  const today = isoToday();
+  const skip = new Set([today]);
+  if(new Date(today + 'T12:00:00').getDay() === 1){ skip.add(addDaysIso(today, -1)); skip.add(addDaysIso(today, -2)); }
+
+  const blank = () => ({ total: 0, matched: 0, missing: 0, rows: [] });
+  const inb = { online: blank(), other: blank() };
+  const out = { online: blank(), other: blank() };
+  const shopBy = new Map();
+  let skipped = 0, through = null;
+
+  for(const [name, day, status] of shopRows){
+    if(!name) continue;
+    shopBy.set(name, { day, status });
+    if(day && (!through || day > through)) through = day;
+    if(skip.has(day)){ skipped++; continue; }
+    const g = inb[shopifyGroup(name)];
+    g.total++;
+    if(ns.byKey.has(name)) g.matched++;
+    else { g.missing++; g.rows.push([name, day, status]); }
+  }
+
+  ns.byKey.forEach(o => {
+    if(!o.fulfilled || o.cancelled) return;
+    const s = shopBy.get(o.key);
+    if(!s || skip.has(s.day)) return;
+    const g = out[shopifyGroup(o.key)];
+    g.total++;
+    const nsPartial = /partially fulfilled/i.test(o.status);
+    const ok = s.status === 'fulfilled' || s.status === 'restocked' || (nsPartial && s.status === 'partial');
+    if(ok) g.matched++;
+    else { g.missing++; g.rows.push([o.key, o.id, s.day, o.status, s.status]); }
+  });
+  for(const g of [inb.online, inb.other, out.online, out.other]) g.rows.sort((a, b) => String(a[s2i(a)]).localeCompare(String(b[s2i(b)])));
+  function s2i(r){ return r.length === 3 ? 1 : 2; }
+
+  return { inbound: inb, outbound: out, through, skipped, uploadedAt: meta && meta.uploadedAt || null, files: meta && meta.files || null };
+}

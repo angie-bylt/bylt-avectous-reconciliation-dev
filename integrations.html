@@ -614,6 +614,8 @@ document.getElementById('runBtn').addEventListener('click', async ()=>{
   result.warehouseDay = computeWarehouseDay(files.ship);
   result.agedOpen = computeAgedOpen(files.sync, result.warehouseDay);
   attachPrevMissing(result, current, savedAt);
+  // Shopify comes from its own upload/refresh; keep the last match rather than drop it.
+  if(current && current.shopify && !result.shopify) result.shopify = current.shopify;
 
   // Ask Avectous why each missing order isn't there (its Interface - Order log).
   const missingOrders = syncMissingOrders(result).slice(0, 200);

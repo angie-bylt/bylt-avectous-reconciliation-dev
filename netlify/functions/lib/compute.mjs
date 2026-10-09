@@ -42,7 +42,7 @@ function load() {
   ctx.window = ctx;
   ctx.globalThis = ctx;
   vm.createContext(ctx);
-  vm.runInContext(code + '\n;globalThis.__api = { computeIntegrations, computeOrderStatus, stripLedgers, INTEGRATIONS, ORDER_STATUS, norm, summarizeInterfaceRecords, applySyncReasons, syncMissingOrders, computeWarehouseDay, computeAgedOpen, attachPrevMissing };', ctx);
+  vm.runInContext(code + '\n;globalThis.__api = { computeIntegrations, computeOrderStatus, stripLedgers, INTEGRATIONS, ORDER_STATUS, norm, summarizeInterfaceRecords, applySyncReasons, syncMissingOrders, computeWarehouseDay, computeAgedOpen, attachPrevMissing, computeShopifyAudit };', ctx);
 
   // Every quoted name in app.js, normalised. A NetSuite column is kept only if
   // the comparison could look it up by one of these names (same matching rules
@@ -59,7 +59,7 @@ function load() {
 export function keepNetSuiteColumns(headers) {
   const { api, names } = load();
   return headers.filter(h => {
-    if (h === 'id') return true;
+    if (h === 'id' || String(h).toLowerCase().replace(/[^a-z0-9]/g, '') === 'internalid') return true;
     const nh = api.norm(h);
     if (!nh) return false;
     if (names.has(nh)) return true;
@@ -102,7 +102,7 @@ function toObjects(table, normalize) {
   };
 }
 
-export function computeAll({ nsSo, nsTo, avo, shp }) {
+export function computeAll({ nsSo, nsTo, avo, shp, shopify }) {
   const { api } = load();
   const so = toObjects(nsSo, true);
   const to = toObjects(nsTo, true);
@@ -112,6 +112,7 @@ export function computeAll({ nsSo, nsTo, avo, shp }) {
   if (integrations && !integrations.error) {
     integrations.warehouseDay = api.computeWarehouseDay(ship);
     integrations.agedOpen = api.computeAgedOpen(sync, integrations.warehouseDay);
+    if (shopify && shopify.rows) integrations.shopify = api.computeShopifyAudit(so, shopify.rows, shopify);
   }
   const orderStatus = api.computeOrderStatus(so, to, ship);
   return {
@@ -127,3 +128,9 @@ export function missingOrders(result) { return load().api.syncMissingOrders(resu
 export function summarizeReason(records, exported) { return load().api.summarizeInterfaceRecords(records, exported); }
 export function applyReasons(result, reasons) { return load().api.applySyncReasons(result, reasons); }
 export function attachPrev(result, prev, prevSavedAt) { return load().api.attachPrevMissing(result, prev, prevSavedAt); }
+
+// Shopify audit on its own, for when a new Shopify export is uploaded between refreshes.
+export function computeShopify(nsSo, shopify) {
+  const { api } = load();
+  return api.computeShopifyAudit(toObjects(nsSo, true), shopify.rows, shopify);
+}

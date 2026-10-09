@@ -512,3 +512,26 @@ with the oldest one's age and an export.
 Change since last refresh: `prevMissing` saved on each result from the previous
 saved run (button and automatic refresh). Header badge shows whether the
 automatic refresh is on and how long ago the numbers were saved.
+
+## Shopify cards from an uploaded export (until the Shopify API)
+Systems page > Upload Shopify export: the Shopify analytics report with
+"Order name", "Day", "Order fulfillment status" and "Orders" (one or more CSVs).
+The page streams the file and keeps rows with Orders >= 1 (the report lists
+every order against every day, so most rows are blanks), then POSTs a compact
+list to /api/shopify (grouped by day, status as one letter; ~2 MB for 160k
+orders). The server saves it (bylt-refresh: shopify:orders), matches it at once
+against the saved NetSuite copy, and every automatic refresh re-matches it.
+Matching (`computeShopifyAudit`): Shopify order name = NetSuite PO/Check Number.
+Inbound = Shopify orders not in NetSuite. Outbound = NetSuite shipped
+(NS_SHIPPED_STATUSES) but Shopify unfulfilled (a Shopify "partial" only counts
+as OK when NetSuite is partially fulfilled too). Today's orders are skipped, and
+on Mondays the weekend too. Split: web orders vs exchanges (EXC-) and POS
+(#nnnn-nnnn). Replace the upload with the Admin API (read_orders,
+read_all_orders) when Jordan sets it up; the matching stays the same.
+
+### Root cause of the Oct 9 incident (fixed)
+Searches 4875/4872 return one row per order, so Tim's RESTlet doesn't add an
+"id" field (it only does for row-level searches). The merge looked for "id",
+treated every saved order as changed, and kept only the newly pulled ones. It
+now matches on Internal ID (`nsIdColumn`), Internal ID is always kept in saved
+copies, and an update with no NetSuite changes leaves the saved copy untouched.

@@ -44,10 +44,15 @@ const nsDate = day => { const [y, m, d] = day.split('-'); return `${+m}/${+d}/${
 const isoDay = v => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v)) ? v.slice(0, 10) : null;
 const isOpen = s => !FINAL_STATUSES.includes(String(s || '').trim().toLowerCase());
 
+// NetSuite's order id. Tim's RESTlet adds an "id" only for row-level searches;
+// searches 4875/4872 return one row per order (no "id"), so use Internal ID.
+const nsIdColumn = headers => headers.includes('id') ? 'id'
+  : headers.find(h => String(h).toLowerCase().replace(/[^a-z0-9]/g, '') === 'internalid') || null;
+
 // ---------- saved tables (stored in chunks, rows as arrays) ----------
 const CHUNK = 5000;
 
-async function readTable(store, name) {
+export async function readTable(store, name) {
   const man = await store.get(`snap:${name}`, { type: 'json' });
   if (!man) return null;
   // Read in small batches, retrying a piece that comes back empty once.
@@ -164,12 +169,18 @@ async function stepNs(ctx, step, cur) {
     // Merge the pulled pages into the saved copy.
     const { headers, objs } = await readWork(store, key, cur.pages);
     let outHeaders, outRows;
+    if (step.incremental && !objs.length) {
+      // Nothing changed in NetSuite since the last refresh: keep the saved copy as it is.
+      ctx.note(`NetSuite ${step.source === 'so' ? 'sales' : 'transfer'} orders: no changes since the last refresh`);
+      await clearWork(store, key, cur.pages);
+      return true;
+    }
     if (step.incremental) {
       let old = null, why = '';
       try {
         old = await readTable(store, key);
         if (!old) why = `no saved copy found (snap:${key} missing)`;
-        else if (!old.headers.includes('id')) why = `saved copy has no id column (${old.headers.length} columns: ${old.headers.slice(0, 6).join(', ')}...)`;
+        else if (!nsIdColumn(old.headers) || !nsIdColumn(headers)) why = `no order id column (${old.headers.length} columns: ${old.headers.slice(0, 6).join(', ')}...)`;
       } catch (err) { why = err.message; }
       if (why) {
         // No trustworthy saved copy to add changes to: pull this search in full instead.
@@ -179,9 +190,10 @@ async function stepNs(ctx, step, cur) {
         ctx.note(`NetSuite ${step.source}: saved copy unusable (${why}); pulling the whole search instead`);
         return false;
       }
-      const changed = new Set(objs.map(o => String(o.id)));
+      const newId = nsIdColumn(headers);
+      const changed = new Set(objs.map(o => String(o[newId] ?? '')).filter(Boolean));
       const { headers: h, oldRows } = unify(old, headers);
-      const idIdx = h.indexOf('id');
+      const idIdx = h.indexOf(nsIdColumn(old.headers));
       const kept = oldRows.filter(a => !changed.has(String(a[idIdx])));
       outHeaders = h; outRows = kept.concat(toArrays(objs, h));
       // A quick refresh only adds and updates orders, so the copy can't shrink much.
@@ -412,7 +424,8 @@ async function stepCompute(ctx) {
       }
     }
   }
-  const out = compute.computeAll({ nsSo, nsTo, avo, shp });
+  const shopify = await store.get('shopify:orders', { type: 'json' }).catch(() => null);
+  const out = compute.computeAll({ nsSo, nsTo, avo, shp, shopify });
   ctx.st.lastCounts = counts;
   const savedAt = new Date().toISOString();
   if (!out.orderStatusError) {
