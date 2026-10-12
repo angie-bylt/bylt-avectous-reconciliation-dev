@@ -3,7 +3,7 @@
 
 import crypto from 'node:crypto';
 
-export const NS_SEARCHES = { so: '4875', to: '4872' };
+export const NS_SEARCHES = { so: '4875', to: '4872', shop: 'customsearch5055' };  // shop: Sales Orders + Cash Sales, for the Shopify check
 
 export const AV_REPORTS = {
   orders: { PageId: 6, PageName: 'Orders', PanelName: 'Orders' },

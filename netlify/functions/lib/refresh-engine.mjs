@@ -46,6 +46,8 @@ const nsDate = day => { const [y, m, d] = day.split('-'); return `${+m}/${+d}/${
 const isoDay = v => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v)) ? v.slice(0, 10) : null;
 const isOpen = s => !FINAL_STATUSES.includes(String(s || '').trim().toLowerCase());
 
+const NS_LABEL = { so: 'NetSuite sales orders', to: 'NetSuite transfer orders', shop: 'NetSuite Shopify check (sales orders + cash sales)' };
+
 // NetSuite's order id. Tim's RESTlet adds an "id" only for row-level searches;
 // searches 4875/4872 return one row per order (no "id"), so use Internal ID.
 const nsIdColumn = headers => headers.includes('id') ? 'id'
@@ -151,6 +153,7 @@ function buildCycle(st, now, haveSnapshots, forceFull) {
     steps: [
       { kind: 'ns', source: 'so', incremental: !full && !!since, since },
       { kind: 'ns', source: 'to', incremental: !full && !!since, since },
+      { kind: 'ns', source: 'shop', incremental: !full && !!since, since },
       { kind: 'avo', incremental: !full },
       { kind: 'shp', incremental: !full },
       { kind: 'resolve', incremental: !full },
@@ -173,7 +176,7 @@ async function stepNs(ctx, step, cur) {
     let outHeaders, outRows;
     if (step.incremental && !objs.length) {
       // Nothing changed in NetSuite since the last refresh: keep the saved copy as it is.
-      ctx.note(`NetSuite ${step.source === 'so' ? 'sales' : 'transfer'} orders: no changes since the last refresh`);
+      ctx.note(`${NS_LABEL[step.source]}: no changes since the last refresh`);
       await clearWork(store, key, cur.pages);
       return true;
     }
@@ -206,10 +209,10 @@ async function stepNs(ctx, step, cur) {
         ctx.note(`NetSuite ${step.source}: merge would shrink the copy from ${old.rows.length} to ${outRows.length} rows; pulling the whole search instead`);
         return false;
       }
-      ctx.note(`NetSuite ${step.source === 'so' ? 'sales' : 'transfer'} orders: ${changed.size} changed orders merged (${old.rows.length} -> ${outRows.length} rows)`);
+      ctx.note(`${NS_LABEL[step.source]}: ${changed.size} changed orders merged (${old.rows.length} -> ${outRows.length} rows)`);
     } else {
       outHeaders = headers; outRows = toArrays(objs, headers);
-      ctx.note(`NetSuite ${step.source === 'so' ? 'sales' : 'transfer'} orders: ${outRows.length} rows`);
+      ctx.note(`${NS_LABEL[step.source]}: ${outRows.length} rows`);
     }
     await writeTable(store, key, outHeaders, outRows);
     await clearWork(store, key, cur.pages);
@@ -230,13 +233,14 @@ async function stepNs(ctx, step, cur) {
     throw err;
   }
   if (page.rows.length) {
-    cur.keep ??= compute.keepNetSuiteColumns(Object.keys(page.rows[0]));
+    // The Shopify check search is three small columns; keep them all.
+    cur.keep ??= step.source === 'shop' ? Object.keys(page.rows[0]) : compute.keepNetSuiteColumns(Object.keys(page.rows[0]));
     await addWork(store, key, cur.pages, cur.keep, toArrays(page.rows, cur.keep));
     cur.pages++;
   }
   cur.offset += page.rows.length;
   cur.total = page.total;
-  ctx.progress = `NetSuite ${step.source === 'so' ? 'sales' : 'transfer'} orders: ${cur.offset.toLocaleString()} of ${page.total.toLocaleString()} rows`;
+  ctx.progress = `${NS_LABEL[step.source]}: ${cur.offset.toLocaleString()} of ${page.total.toLocaleString()} rows`;
   if (!page.hasMore || !page.rows.length) cur.finished = true;
   return false;
 }
@@ -427,7 +431,8 @@ async function stepCompute(ctx) {
     }
   }
   const shopify = await store.get('shopify:orders', { type: 'json' }).catch(() => null);
-  const out = compute.computeAll({ nsSo, nsTo, avo, shp, shopify });
+  const nsShop = shopify ? await readTable(store, 'ns-shop').catch(() => null) : null;
+  const out = compute.computeAll({ nsSo, nsTo, avo, shp, shopify, nsShop });
   ctx.st.lastCounts = counts;
   const savedAt = new Date().toISOString();
   if (!out.orderStatusError) {

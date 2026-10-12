@@ -286,7 +286,7 @@ function render(){
   const shopSrc = sh ? `<div class="shop-src"><span>From Shopify exports, orders through ${fmtDay(sh.through)}</span><button type="button" data-upload>Add Shopify export</button><span data-upstatus></span></div>` : '';
   inc.innerHTML =
     (sh ? queueCard({ from: 'Shopify', to: 'NetSuite', so: sh.inbound.online, toq: sh.inbound.other,
-        leftLabel: 'Orders in Shopify', rightLabel: 'Orders in NetSuite', exportId: 'shopIn',
+        leftLabel: 'Orders in Shopify', rightLabel: sh.checkedAgainst === 'sales orders and cash sales' ? 'In NetSuite (orders + cash sales)' : 'Orders in NetSuite', exportId: 'shopIn',
         splitLabels: ['Web orders missing', 'Exchanges & POS missing'], ageCol: 1, ageWord: 'since order date', extra: shopSrc })
       : pendingCard('Shopify', 'NetSuite', ['Orders in Shopify', 'Orders in NetSuite'])) +
     queueCard({ from: 'NetSuite', to: 'Avectous', so: a.soSync, toq: a.toSync,

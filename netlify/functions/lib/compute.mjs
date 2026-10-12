@@ -102,7 +102,7 @@ function toObjects(table, normalize) {
   };
 }
 
-export function computeAll({ nsSo, nsTo, avo, shp, shopify }) {
+export function computeAll({ nsSo, nsTo, avo, shp, shopify, nsShop }) {
   const { api } = load();
   const so = toObjects(nsSo, true);
   const to = toObjects(nsTo, true);
@@ -112,7 +112,7 @@ export function computeAll({ nsSo, nsTo, avo, shp, shopify }) {
   if (integrations && !integrations.error) {
     integrations.warehouseDay = api.computeWarehouseDay(ship);
     integrations.agedOpen = api.computeAgedOpen(sync, integrations.warehouseDay);
-    if (shopify && shopify.rows) integrations.shopify = api.computeShopifyAudit(so, shopify.rows, shopify);
+    if (shopify && shopify.rows) integrations.shopify = api.computeShopifyAudit(so, shopify.rows, shopify, nsShop ? toObjects(nsShop, false) : null);
   }
   const orderStatus = api.computeOrderStatus(so, to, ship);
   return {
@@ -130,7 +130,7 @@ export function applyReasons(result, reasons) { return load().api.applySyncReaso
 export function attachPrev(result, prev, prevSavedAt) { return load().api.attachPrevMissing(result, prev, prevSavedAt); }
 
 // Shopify audit on its own, for when a new Shopify export is uploaded between refreshes.
-export function computeShopify(nsSo, shopify) {
+export function computeShopify(nsSo, shopify, nsShop) {
   const { api } = load();
-  return api.computeShopifyAudit(toObjects(nsSo, true), shopify.rows, shopify);
+  return api.computeShopifyAudit(toObjects(nsSo, true), shopify.rows, shopify, nsShop ? toObjects(nsShop, false) : null);
 }

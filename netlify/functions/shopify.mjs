@@ -60,9 +60,10 @@ export default async (req) => {
   let note = 'Saved. It will be matched at the next refresh.';
   try {
     const nsSo = await readTable(store, 'ns-so');
+    const nsShop = await readTable(store, 'ns-shop').catch(() => null);
     const saved = await results.get('integrations', { type: 'json' });
     if (nsSo && saved && saved.result) {
-      saved.result.shopify = compute.computeShopify(nsSo, shopify);
+      saved.result.shopify = compute.computeShopify(nsSo, shopify, nsShop);
       await results.setJSON('integrations', saved);
       note = 'Saved and matched against NetSuite.';
     }

@@ -2372,10 +2372,25 @@ function shopifyGroup(name){
   if(/^#\d+-\d+$/.test(name)) return 'other';     // POS
   return 'online';
 }
-function computeShopifyAudit(soData, shopRows, meta){
+// nsAllData (optional): the "Dashboard - Shopify Order Check" search (Sales
+// Orders + Cash Sales, PO/Check Number). When present, "is it in NetSuite?"
+// checks against that, so in-store Cash Sales don't count as missing.
+function computeShopifyAudit(soData, shopRows, meta, nsAllData){
   if(!soData || !shopRows || !shopRows.length) return null;
   const ns = nsOrderIndex(mergeSheets(soData), INTEGRATIONS.sources.so.keyField);
   if(ns.error) return { error: ns.error };
+  let inNetSuite = k => ns.byKey.has(k);
+  let checkedAgainst = 'sales orders';
+  const all = nsAllData && mergeSheets(nsAllData);
+  if(all && all.rows && all.rows.length){
+    const poCol = guessColumn(all.headers, 'PO/Check Number');
+    if(poCol){
+      const keys = new Set();
+      for(const r of all.rows){ const v = String(r[poCol] || '').trim(); if(v) keys.add(v); }
+      inNetSuite = k => keys.has(k) || ns.byKey.has(k);
+      checkedAgainst = 'sales orders and cash sales';
+    }
+  }
   const today = isoToday();
   const skip = new Set([today]);
   if(new Date(today + 'T12:00:00').getDay() === 1){ skip.add(addDaysIso(today, -1)); skip.add(addDaysIso(today, -2)); }
@@ -2395,7 +2410,7 @@ function computeShopifyAudit(soData, shopRows, meta){
     if(skip.has(day)){ skipped++; continue; }
     const g = inb[shopifyGroup(name)];
     g.total++;
-    if(ns.byKey.has(name)) g.matched++;
+    if(inNetSuite(name)) g.matched++;
     else { g.missing++; g.rows.push([name, day, status]); }
   }
 
@@ -2413,5 +2428,5 @@ function computeShopifyAudit(soData, shopRows, meta){
   for(const g of [inb.online, inb.other, out.online, out.other]) g.rows.sort((a, b) => String(a[s2i(a)]).localeCompare(String(b[s2i(b)])));
   function s2i(r){ return r.length === 3 ? 1 : 2; }
 
-  return { inbound: inb, outbound: out, through, skipped, cancelled, uploadedAt: meta && meta.uploadedAt || null, files: meta && meta.files || null };
+  return { inbound: inb, outbound: out, through, skipped, cancelled, checkedAgainst, uploadedAt: meta && meta.uploadedAt || null, files: meta && meta.files || null };
 }

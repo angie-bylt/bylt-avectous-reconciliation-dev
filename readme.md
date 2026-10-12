@@ -547,3 +547,9 @@ copies, and an update with no NetSuite changes leaves the saved copy untouched.
   (Order name / Order date / Export status / Shopify status (Oct 12)). When a
   "Shopify status ..." column is filled it wins over the export status.
   Orders cancelled in Shopify are left out of both Shopify cards.
+- Oct 12: the Shopify -> NetSuite check uses customsearch5055 "Dashboard -
+  Shopify Order Check" (Sales Orders + Cash Sales, main line, since 8/6, PO/Check
+  Number not empty; columns Internal ID, PO/Check Number, Type). Pulled as a third
+  NetSuite step (saved copy "ns-shop", changes only each hour, full weekly).
+  ~32,500 Shopify orders are Cash Sales, almost all in-store sales at the retail
+  stores; without this search they looked missing. Search 4875 is unchanged.

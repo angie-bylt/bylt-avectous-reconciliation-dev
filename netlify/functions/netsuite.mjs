@@ -12,7 +12,8 @@ import { isAuthorized, getSecret } from './lib/auth.mjs';
 // Same searches the "Open" links on Integrations Status point to.
 const SEARCHES = {
   so: '4875',  // NetSuite All Orders Report
-  to: '4872'   // NetSuite All Transfer Orders Report
+  to: '4872',  // NetSuite All Transfer Orders Report
+  shop: 'customsearch5055'  // Dashboard - Shopify Order Check (Sales Orders + Cash Sales)
 };
 
 function json(status, body) {
