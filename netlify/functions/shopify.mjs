@@ -1,5 +1,5 @@
-// Shopify orders from an uploaded Shopify export, until the Shopify API is
-// connected. The page reads the export and sends a compact list:
+// Shopify orders from uploaded Shopify exports, until the Shopify API is
+// connected. Uploads add up (newest wins for an order seen before). The page reads the export and sends a compact list:
 //   POST /api/shopify { lines: "name\tday\tstatus\n...", files: [...] }
 // Saved for every automatic refresh to use, and matched right away against the
 // saved NetSuite copy so the Systems page updates without waiting.
@@ -19,7 +19,7 @@ export default async (req) => {
 
   if (req.method === 'GET') {
     const saved = await store.get('shopify:orders', { type: 'json' });
-    return json(200, { ok: true, saved: saved ? { uploadedAt: saved.uploadedAt, through: saved.through, count: saved.rows.length, files: saved.files } : null });
+    return json(200, { ok: true, saved: saved ? { uploadedAt: saved.uploadedAt, from: saved.from, through: saved.through, count: saved.rows.length, files: saved.files } : null });
   }
   if (req.method !== 'POST') return json(405, { ok: false, error: 'GET or POST only' });
 
@@ -40,7 +40,20 @@ export default async (req) => {
   }
   if (!rows.length) return json(400, { ok: false, error: 'No orders found in the upload.' });
 
-  const shopify = { uploadedAt: new Date().toISOString(), through, files: (body.files || []).slice(0, 10).map(String), rows };
+  // Uploads add up: keep every order from earlier uploads, add new ones, and
+  // let the newest upload win for orders seen before (status may have changed).
+  const prev = await store.get('shopify:orders', { type: 'json' }).catch(() => null);
+  const byName = new Map((prev && prev.rows || []).map(r => [r[0], r]));
+  let added = 0, updated = 0;
+  for (const r of rows) {
+    if (byName.has(r[0])) updated++; else added++;
+    byName.set(r[0], r);
+  }
+  const all = [...byName.values()];
+  let allThrough = null, allFrom = null;
+  for (const r of all) { if (!allThrough || r[1] > allThrough) allThrough = r[1]; if (!allFrom || r[1] < allFrom) allFrom = r[1]; }
+  const files = [...(prev && prev.files || []), ...(body.files || []).map(String)].slice(-30);
+  const shopify = { uploadedAt: new Date().toISOString(), from: allFrom, through: allThrough, files, rows: all };
   await store.setJSON('shopify:orders', shopify);
 
   // Match against the saved NetSuite copy now, so the page doesn't wait for a refresh.
@@ -56,7 +69,7 @@ export default async (req) => {
   } catch (err) {
     note = `Saved. Matching will happen at the next refresh (${err.message}).`;
   }
-  return json(200, { ok: true, count: rows.length, through, note });
+  return json(200, { ok: true, count: rows.length, added, updated, total: all.length, from: allFrom, through: allThrough, note });
 };
 
 export const config = { path: '/api/shopify' };

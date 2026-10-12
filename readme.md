@@ -535,3 +535,11 @@ Searches 4875/4872 return one row per order, so Tim's RESTlet doesn't add an
 treated every saved order as changed, and kept only the newly pulled ones. It
 now matches on Internal ID (`nsIdColumn`), Internal ID is always kept in saved
 copies, and an update with no NetSuite changes leaves the saved copy untouched.
+- Oct 12: Shopify uploads now add up. Each upload is merged into the saved list
+  by order name (new orders added, existing ones updated to the newest status),
+  so several files over time build the full history. Upload recent days
+  regularly so open orders' fulfillment status stays current.
+- Oct 12: the automatic refresh starts at :45 past every hour so numbers are fresh by the top of the hour (fixed schedule,
+  after Avectous's :31 order pull and clear of the busy top of the hour).
+  A refresh still running at :45 finishes first; the next starts the next :45.
+  Refresh now / Rebuild still start within a minute.

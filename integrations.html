@@ -553,7 +553,7 @@ function renderAuto(){
   } else if(s.paused){
     parts.push('Off. Use the pull buttons below, or press Start to refresh automatically every hour.');
   } else {
-    parts.push('Refreshes every hour.');
+    parts.push('Refreshes every hour, ready by the top of the hour.');
   }
   if(s.lastSuccessAt) parts.push(`Last finished ${fmtWhen(s.lastSuccessAt)}.`);
   if(s.lastError && s.status === 'running') parts.push(`Retrying after: ${s.lastError.replace(/^\S+ /,'')}`);

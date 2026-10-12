@@ -283,7 +283,7 @@ function render(){
   const prev = current.prevMissing || {};
   const w = current.warehouseDay;
   const sh = current.shopify && !current.shopify.error ? current.shopify : null;
-  const shopSrc = sh ? `<div class="shop-src"><span>From Shopify export, orders through ${fmtDay(sh.through)}</span><button type="button" data-upload>Upload new export</button><span data-upstatus></span></div>` : '';
+  const shopSrc = sh ? `<div class="shop-src"><span>From Shopify exports, orders through ${fmtDay(sh.through)}</span><button type="button" data-upload>Add Shopify export</button><span data-upstatus></span></div>` : '';
   inc.innerHTML =
     (sh ? queueCard({ from: 'Shopify', to: 'NetSuite', so: sh.inbound.online, toq: sh.inbound.other,
         leftLabel: 'Orders in Shopify', rightLabel: 'Orders in NetSuite', exportId: 'shopIn',
@@ -405,7 +405,7 @@ document.getElementById('shopFile').addEventListener('change', async e => {
     const res = await fetch('/api/shopify', { method:'POST', headers:{ 'content-type':'application/json' }, body: JSON.stringify({ lines, files: files.map(f => f.name) }) });
     const data = await res.json();
     if(!data.ok) throw new Error(data.error || 'Upload failed');
-    say(`${data.count.toLocaleString()} orders through ${fmtDay(data.through)}. ${data.note}`);
+    say(`${data.added.toLocaleString()} new and ${data.updated.toLocaleString()} updated. ${data.total.toLocaleString()} Shopify orders saved, ${fmtDay(data.from)} to ${fmtDay(data.through)}. ${data.note}`);
     await load();
   } catch(err){
     say(`Upload stopped: ${err.message}`);

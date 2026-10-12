@@ -26,6 +26,8 @@ const FINAL_STATUSES = ['shipped', 'cancelled'];
 const DEFAULT_OPEN_STATUSES = ['New', 'Batched', 'Waved', 'Picked', 'Packed'];
 const SHIP_FROM = '2026-07-01';
 const CYCLE_EVERY_MIN = 60;
+const START_MINUTE = 45;            // refreshes start at :45 so numbers are fresh by the top of the hour (after Avectous's :31 pull)
+const hourSlot = ms => Math.floor((ms - START_MINUTE * 60000) / 3600000);
 const FULL_EVERY_DAYS = 7;
 const RUN_BUDGET_MS = 23000;        // stop starting new requests after this
 const HARD_LIMIT_MS = 28000;        // nothing may still be running after this
@@ -508,11 +510,13 @@ export async function runTick({ store, results, clients, compute, now = () => Da
 
   try {
     if (st.status === 'idle') {
-      const due = !st.lastSuccessAt || (t0 - Date.parse(st.lastSuccessAt)) >= CYCLE_EVERY_MIN * 60000;
+      // Due once per hour, at :10. A refresh still running at :10 just finishes; the next starts at the next :10.
+      const due = !st.lastSuccessAt || st.lastSlot !== hourSlot(t0);
       if (st.paused && !st.requested) return { skipped: 'paused' };
       if (!due && !st.requested) return { skipped: 'not due' };
       const haveSnapshots = !!(await store.get('snap:ns-so', { type: 'json' }));
       const c = buildCycle(st, t0, haveSnapshots, st.requested === 'full');
+      st.lastSlot = hourSlot(t0);
       Object.assign(st, { status: 'running', steps: c.steps, mode: c.mode, step: 0, cursor: {}, cycleStartedAt: new Date(t0).toISOString(), requested: null, errors: 0, lastError: null, leftOpen: [] });
       ctx.note(`Started a${c.mode === "incremental" ? "n" : ""} ${c.mode} refresh`);
     }
