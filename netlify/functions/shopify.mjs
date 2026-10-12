@@ -42,7 +42,8 @@ export default async (req) => {
 
   // Uploads add up: keep every order from earlier uploads, add new ones, and
   // let the newest upload win for orders seen before (status may have changed).
-  const prev = await store.get('shopify:orders', { type: 'json' }).catch(() => null);
+  // body.replace: start over with just this upload (e.g. after fixing the report's filters).
+  const prev = body.replace ? null : await store.get('shopify:orders', { type: 'json' }).catch(() => null);
   const byName = new Map((prev && prev.rows || []).map(r => [r[0], r]));
   let added = 0, updated = 0;
   for (const r of rows) {

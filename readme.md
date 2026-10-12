@@ -553,3 +553,18 @@ copies, and an update with no NetSuite changes leaves the saved copy untouched.
   NetSuite step (saved copy "ns-shop", changes only each hour, full weekly).
   ~32,500 Shopify orders are Cash Sales, almost all in-store sales at the retail
   stores; without this search they looked missing. Search 4875 is unchanged.
+- Oct 12: customsearch5055 must cover ALL locations (it was 810-only, so the
+  ~32,000 store Cash Sales were missing). Saved copies now carry a version;
+  ns-shop is v2, so the first refresh after this deploy re-pulls 5055 in full.
+- Oct 12: "Replace all" on the Shopify cards clears saved Shopify orders and keeps
+  only the new upload. The Shopify report must exclude in-store sales:
+  WHERE sales_channel != 'Point of Sale' (and HAVING orders > 0, no TIMESERIES).
+- Oct 12 (final rule): the Shopify check covers only orders 810 ships. Search 5055
+  covers all locations with a Location column (main line). A Shopify order that
+  NetSuite has as a Cash Sale at a store (location not 810) is an in-store sale
+  and is left out of both Shopify cards. Everything else (web, app, TikTok,
+  exchanges, Endless Aisle) must be in NetSuite or it shows as missing.
+  ns-shop is v3, so the first refresh after deploy re-pulls 5055 in full.
+- Search 5055 returns Location as an id. DC = 431 (810 Texas DC) or 437 (811
+  Wholesale Texas DC), matched by id or by name; any other location on a Cash
+  Sale = in-store sale.

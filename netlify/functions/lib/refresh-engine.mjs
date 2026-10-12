@@ -46,6 +46,11 @@ const nsDate = day => { const [y, m, d] = day.split('-'); return `${+m}/${+d}/${
 const isoDay = v => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v)) ? v.slice(0, 10) : null;
 const isOpen = s => !FINAL_STATUSES.includes(String(s || '').trim().toLowerCase());
 
+// Bump a source's version when its saved search criteria change, so the next
+// refresh re-pulls it in full once instead of only adding changed orders.
+// shop v3: customsearch5055 covers all locations and has a Location column (Oct 12).
+const SOURCE_VERSION = { 'ns-shop': 3 };
+
 const NS_LABEL = { so: 'NetSuite sales orders', to: 'NetSuite transfer orders', shop: 'NetSuite Shopify check (sales orders + cash sales)' };
 
 // NetSuite's order id. Tim's RESTlet adds an "id" only for row-level searches;
@@ -76,7 +81,7 @@ export async function readTable(store, name) {
     rows.push(...parts[i]);
   }
   if (man.count != null && rows.length !== man.count) throw new Error(`saved copy "${name}" has ${rows.length} rows, expected ${man.count}`);
-  return { headers: man.headers, rows, savedAt: man.savedAt };
+  return { headers: man.headers, rows, savedAt: man.savedAt, version: man.version || 1 };
 }
 
 async function writeTable(store, name, headers, rows) {
@@ -90,7 +95,7 @@ async function writeTable(store, name, headers, rows) {
     writes.push(store.setJSON(key, rows.slice(i, i + CHUNK)));
   }
   await Promise.all(writes);
-  await store.setJSON(`snap:${name}`, { headers, chunks, count: rows.length, savedAt: new Date().toISOString() });
+  await store.setJSON(`snap:${name}`, { headers, chunks, count: rows.length, savedAt: new Date().toISOString(), version: SOURCE_VERSION[name] || 1 });
   if (old && old.chunks) await Promise.all(old.chunks.map(k => store.delete(k).catch(() => {})));
 }
 
@@ -185,6 +190,7 @@ async function stepNs(ctx, step, cur) {
       try {
         old = await readTable(store, key);
         if (!old) why = `no saved copy found (snap:${key} missing)`;
+        else if ((old.version || 1) < (SOURCE_VERSION[key] || 1)) why = 'the search was changed since the saved copy was made';
         else if (!nsIdColumn(old.headers) || !nsIdColumn(headers)) why = `no order id column (${old.headers.length} columns: ${old.headers.slice(0, 6).join(', ')}...)`;
       } catch (err) { why = err.message; }
       if (why) {

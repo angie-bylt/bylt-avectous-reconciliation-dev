@@ -283,10 +283,10 @@ function render(){
   const prev = current.prevMissing || {};
   const w = current.warehouseDay;
   const sh = current.shopify && !current.shopify.error ? current.shopify : null;
-  const shopSrc = sh ? `<div class="shop-src"><span>From Shopify exports, orders through ${fmtDay(sh.through)}</span><button type="button" data-upload>Add Shopify export</button><span data-upstatus></span></div>` : '';
+  const shopSrc = sh ? `<div class="shop-src"><span>From Shopify exports, orders through ${fmtDay(sh.through)}.${sh.inStoreSales ? ` ${fmt(sh.inStoreSales)} in-store sales left out.` : ''}</span><button type="button" data-upload>Add Shopify export</button><button type="button" data-upload="replace" title="Clears the saved Shopify orders and keeps only this upload">Replace all</button><span data-upstatus></span></div>` : '';
   inc.innerHTML =
     (sh ? queueCard({ from: 'Shopify', to: 'NetSuite', so: sh.inbound.online, toq: sh.inbound.other,
-        leftLabel: 'Orders in Shopify', rightLabel: sh.checkedAgainst === 'sales orders and cash sales' ? 'In NetSuite (orders + cash sales)' : 'Orders in NetSuite', exportId: 'shopIn',
+        leftLabel: 'Shopify orders 810 ships', rightLabel: 'Orders in NetSuite', exportId: 'shopIn',
         splitLabels: ['Web orders missing', 'Exchanges & POS missing'], ageCol: 1, ageWord: 'since order date', extra: shopSrc })
       : pendingCard('Shopify', 'NetSuite', ['Orders in Shopify', 'Orders in NetSuite'])) +
     queueCard({ from: 'NetSuite', to: 'Avectous', so: a.soSync, toq: a.toSync,
@@ -304,7 +304,11 @@ function render(){
       : pendingCard('NetSuite', 'Shopify', ['Fulfilled in NetSuite', 'Fulfilled in Shopify']));
 
   document.querySelectorAll('[data-export]').forEach(b => b.addEventListener('click', ()=> exportList(b.dataset.export)));
-  document.querySelectorAll('[data-upload]').forEach(b => b.addEventListener('click', ()=> document.getElementById('shopFile').click()));
+  document.querySelectorAll('[data-upload]').forEach(b => b.addEventListener('click', ()=>{
+    if(b.dataset.upload === 'replace' && !confirm('Replace all saved Shopify orders with the file you pick next?')) return;
+    replaceShopify = b.dataset.upload === 'replace';
+    document.getElementById('shopFile').click();
+  }));
 }
 
 function exportList(kind){
@@ -404,6 +408,7 @@ async function readShopifyExport(file, keep, onProgress){
   handle(buf);
 }
 
+let replaceShopify = false;
 document.getElementById('shopFile').addEventListener('change', async e => {
   const files = [...e.target.files];
   e.target.value = '';
@@ -423,7 +428,8 @@ document.getElementById('shopFile').addEventListener('change', async e => {
     const byDay = new Map();
     for(const [name, d, st] of keep.values()){ if(!byDay.has(d)) byDay.set(d, []); byDay.get(d).push(name + '\t' + (st[0] || 'u')); }
     const lines = [...byDay].map(([d, list]) => '@' + d + '\n' + list.join('\n')).join('\n');
-    const res = await fetch('/api/shopify', { method:'POST', headers:{ 'content-type':'application/json' }, body: JSON.stringify({ lines, files: files.map(f => f.name) }) });
+    const res = await fetch('/api/shopify', { method:'POST', headers:{ 'content-type':'application/json' }, body: JSON.stringify({ lines, files: files.map(f => f.name), replace: replaceShopify }) });
+    replaceShopify = false;
     const data = await res.json();
     if(!data.ok) throw new Error(data.error || 'Upload failed');
     say(`${data.added.toLocaleString()} new and ${data.updated.toLocaleString()} updated. ${data.total.toLocaleString()} Shopify orders saved, ${fmtDay(data.from)} to ${fmtDay(data.through)}. ${data.note}`);

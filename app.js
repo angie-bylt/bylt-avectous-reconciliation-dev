@@ -2375,19 +2375,39 @@ function shopifyGroup(name){
 // nsAllData (optional): the "Dashboard - Shopify Order Check" search (Sales
 // Orders + Cash Sales, PO/Check Number). When present, "is it in NetSuite?"
 // checks against that, so in-store Cash Sales don't count as missing.
+// The Texas DC, by NetSuite location id or name: 431 = 810 Texas DC,
+// 437 = 811 Wholesale Texas DC. Searches may return either the id or the name.
+const DC_LOCATION_IDS = new Set(['431', '437']);
+function isDcLocation(loc){
+  const t = String(loc || '').trim();
+  return DC_LOCATION_IDS.has(t) || /^81[01]\b/.test(t);
+}
 function computeShopifyAudit(soData, shopRows, meta, nsAllData){
   if(!soData || !shopRows || !shopRows.length) return null;
   const ns = nsOrderIndex(mergeSheets(soData), INTEGRATIONS.sources.so.keyField);
   if(ns.error) return { error: ns.error };
   let inNetSuite = k => ns.byKey.has(k);
+  let isInStoreSale = () => false;
   let checkedAgainst = 'sales orders';
   const all = nsAllData && mergeSheets(nsAllData);
   if(all && all.rows && all.rows.length){
     const poCol = guessColumn(all.headers, 'PO/Check Number');
+    const typeCol = guessColumn(all.headers, 'Type');
+    const locCol = guessColumn(all.headers, 'Location');
     if(poCol){
-      const keys = new Set();
-      for(const r of all.rows){ const v = String(r[poCol] || '').trim(); if(v) keys.add(v); }
+      const keys = new Set(), inStore = new Set();
+      for(const r of all.rows){
+        const v = String(r[poCol] || '').trim();
+        if(!v) continue;
+        keys.add(v);
+        // In-store sale: a Cash Sale at a store, not at 810 Texas DC. 810 doesn't
+        // ship these, so they're left out of the Shopify check entirely.
+        const type = norm(typeCol ? r[typeCol] : '');
+        const loc = String(locCol ? r[locCol] || '' : '');
+        if(locCol && (type === 'cashsale' || type === 'cash sale') && loc && !isDcLocation(loc)) inStore.add(v);
+      }
       inNetSuite = k => keys.has(k) || ns.byKey.has(k);
+      isInStoreSale = k => inStore.has(k);
       checkedAgainst = 'sales orders and cash sales';
     }
   }
@@ -2401,12 +2421,13 @@ function computeShopifyAudit(soData, shopRows, meta, nsAllData){
   const shopBy = new Map();
   let skipped = 0, through = null;
 
-  let cancelled = 0;
+  let cancelled = 0, inStoreSales = 0;
   for(const [name, day, status] of shopRows){
     if(!name) continue;
     shopBy.set(name, { day, status });
     if(day && (!through || day > through)) through = day;
     if(status === 'cancelled'){ cancelled++; continue; }   // cancelled in Shopify: shouldn't be in NetSuite
+    if(isInStoreSale(name)){ inStoreSales++; continue; }   // sold and handed over at a store: not an 810 order
     if(skip.has(day)){ skipped++; continue; }
     const g = inb[shopifyGroup(name)];
     g.total++;
@@ -2417,7 +2438,7 @@ function computeShopifyAudit(soData, shopRows, meta, nsAllData){
   ns.byKey.forEach(o => {
     if(!o.fulfilled || o.cancelled) return;
     const s = shopBy.get(o.key);
-    if(!s || s.status === 'cancelled' || skip.has(s.day)) return;
+    if(!s || s.status === 'cancelled' || skip.has(s.day) || isInStoreSale(o.key)) return;
     const g = out[shopifyGroup(o.key)];
     g.total++;
     const nsPartial = /partially fulfilled/i.test(o.status);
@@ -2428,5 +2449,5 @@ function computeShopifyAudit(soData, shopRows, meta, nsAllData){
   for(const g of [inb.online, inb.other, out.online, out.other]) g.rows.sort((a, b) => String(a[s2i(a)]).localeCompare(String(b[s2i(b)])));
   function s2i(r){ return r.length === 3 ? 1 : 2; }
 
-  return { inbound: inb, outbound: out, through, skipped, cancelled, checkedAgainst, uploadedAt: meta && meta.uploadedAt || null, files: meta && meta.files || null };
+  return { inbound: inb, outbound: out, through, skipped, cancelled, inStoreSales, checkedAgainst, uploadedAt: meta && meta.uploadedAt || null, files: meta && meta.files || null };
 }
