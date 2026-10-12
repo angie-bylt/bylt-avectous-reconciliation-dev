@@ -2386,10 +2386,12 @@ function computeShopifyAudit(soData, shopRows, meta){
   const shopBy = new Map();
   let skipped = 0, through = null;
 
+  let cancelled = 0;
   for(const [name, day, status] of shopRows){
     if(!name) continue;
     shopBy.set(name, { day, status });
     if(day && (!through || day > through)) through = day;
+    if(status === 'cancelled'){ cancelled++; continue; }   // cancelled in Shopify: shouldn't be in NetSuite
     if(skip.has(day)){ skipped++; continue; }
     const g = inb[shopifyGroup(name)];
     g.total++;
@@ -2400,7 +2402,7 @@ function computeShopifyAudit(soData, shopRows, meta){
   ns.byKey.forEach(o => {
     if(!o.fulfilled || o.cancelled) return;
     const s = shopBy.get(o.key);
-    if(!s || skip.has(s.day)) return;
+    if(!s || s.status === 'cancelled' || skip.has(s.day)) return;
     const g = out[shopifyGroup(o.key)];
     g.total++;
     const nsPartial = /partially fulfilled/i.test(o.status);
@@ -2411,5 +2413,5 @@ function computeShopifyAudit(soData, shopRows, meta){
   for(const g of [inb.online, inb.other, out.online, out.other]) g.rows.sort((a, b) => String(a[s2i(a)]).localeCompare(String(b[s2i(b)])));
   function s2i(r){ return r.length === 3 ? 1 : 2; }
 
-  return { inbound: inb, outbound: out, through, skipped, uploadedAt: meta && meta.uploadedAt || null, files: meta && meta.files || null };
+  return { inbound: inb, outbound: out, through, skipped, cancelled, uploadedAt: meta && meta.uploadedAt || null, files: meta && meta.files || null };
 }

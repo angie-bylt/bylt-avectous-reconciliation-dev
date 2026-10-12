@@ -353,6 +353,17 @@ function splitCsv(line){
   }
   out.push(cur); return out;
 }
+// Plain status from either file: fulfilled / unfulfilled / partial / restocked / cancelled.
+function shopStatus(v){
+  const t = String(v || '').trim().toLowerCase();
+  if(!t || t.startsWith('not checked') || t.startsWith('(')) return null;
+  if(t.startsWith('cancel')) return 'cancelled';
+  if(t.startsWith('partial')) return 'partial';
+  if(t.startsWith('restock')) return 'restocked';
+  if(t.startsWith('unfulfil')) return 'unfulfilled';
+  if(t.startsWith('fulfil')) return 'fulfilled';
+  return null;
+}
 async function readShopifyExport(file, keep, onProgress){
   const reader = file.stream().pipeThrough(new TextDecoderStream()).getReader();
   let buf = '', idx = null, done = 0;
@@ -360,15 +371,25 @@ async function readShopifyExport(file, keep, onProgress){
     if(!line) return;
     const f = splitCsv(line.replace(/\r$/, ''));
     if(!idx){
+      // Accepts Shopify's report (Order name / Day / Order fulfillment status / Orders)
+      // and the combined file (Order name / Order date / Export status /
+      // Shopify status (Oct 12)). A later "Shopify status" column wins when filled.
       const h = f.map(x => x.trim().toLowerCase());
-      idx = { name: h.indexOf('order name'), day: h.indexOf('day'), status: h.indexOf('order fulfillment status'), orders: h.indexOf('orders') };
-      if(idx.name < 0 || idx.status < 0) throw new Error(`${file.name} is missing an "Order name" or "Order fulfillment status" column.`);
+      const find = (...names) => { for(const n of names){ const i = h.indexOf(n); if(i >= 0) return i; } return -1; };
+      idx = {
+        name: find('order name'),
+        day: find('day', 'order date'),
+        status: find('order fulfillment status', 'export status', 'fulfillment status'),
+        latest: h.findIndex(x => x.startsWith('shopify status')),
+        orders: find('orders')
+      };
+      if(idx.name < 0 || idx.status < 0 || idx.day < 0) throw new Error(`${file.name} needs "Order name", a date ("Day" or "Order date") and a fulfillment status column.`);
       return;
     }
     if(idx.orders >= 0 && Number(f[idx.orders]) < 1) return;
     const name = (f[idx.name] || '').trim();
-    if(!name) return;
-    keep.set(name, [name, (f[idx.day] || '').trim().slice(0, 10), (f[idx.status] || '').trim().toLowerCase()]);
+    if(!name || !name.startsWith('#') && !/^EXC-/i.test(name)) return;
+    keep.set(name, [name, (f[idx.day] || '').trim().slice(0, 10), shopStatus(f[idx.latest]) || shopStatus(f[idx.status]) || 'unfulfilled']);
   };
   for(;;){
     const { value, done: end } = await reader.read();

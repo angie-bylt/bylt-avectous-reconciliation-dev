@@ -543,3 +543,7 @@ copies, and an update with no NetSuite changes leaves the saved copy untouched.
   after Avectous's :31 order pull and clear of the busy top of the hour).
   A refresh still running at :45 finishes first; the next starts the next :45.
   Refresh now / Rebuild still start within a minute.
+- Oct 12: the Shopify uploader also accepts the combined file layout
+  (Order name / Order date / Export status / Shopify status (Oct 12)). When a
+  "Shopify status ..." column is filled it wins over the export status.
+  Orders cancelled in Shopify are left out of both Shopify cards.

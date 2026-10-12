@@ -10,7 +10,7 @@ import { readTable } from './lib/refresh-engine.mjs';
 import * as compute from './lib/compute.mjs';
 
 const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
-const STATUS = { f: 'fulfilled', u: 'unfulfilled', p: 'partial', r: 'restocked' };
+const STATUS = { f: 'fulfilled', u: 'unfulfilled', p: 'partial', r: 'restocked', c: 'cancelled' };
 
 export default async (req) => {
   if (!isAuthorized(req, getSecret())) return json(401, { ok: false, error: 'Not signed in. Log out and back in.' });
@@ -28,7 +28,7 @@ export default async (req) => {
   const rows = [];
   const seen = new Set();
   let through = null;
-  // Format: "@YYYY-MM-DD" lines start a day; each following line is "name<TAB>f|u|p|r".
+  // Format: "@YYYY-MM-DD" lines start a day; each following line is "name<TAB>f|u|p|r|c".
   let day = null;
   for (const line of String(body.lines || '').split('\n')) {
     if (line.startsWith('@')) { day = /^@\d{4}-\d{2}-\d{2}$/.test(line) ? line.slice(1) : null; continue; }
