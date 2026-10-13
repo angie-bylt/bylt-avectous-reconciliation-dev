@@ -97,6 +97,13 @@
   .shop-src button, .sd-card.pending .up{ border:1px solid #c9d1dc; background:#fff; color:var(--navy); border-radius:20px; padding:5px 12px; font-size:12.5px; font-weight:700; cursor:pointer; }
   .sd-card.pending .up{ margin-top:12px; width:100%; padding:8px; }
   .up-status{ font-size:12px; color:var(--muted); margin-top:6px; }
+  .sh-test{ margin:14px auto 0; max-width:760px; text-align:center; }
+  .sh-test button{ border:1px solid #c9d1dc; background:#fff; color:var(--navy); border-radius:20px; padding:6px 14px; font-size:12.5px; font-weight:700; cursor:pointer; }
+  .sh-test ol{ list-style:none; padding:0; margin:10px 0 0; text-align:left; background:#fff; border-radius:12px; }
+  .sh-test ol:empty{ display:none; }
+  .sh-test li{ display:flex; gap:10px; padding:8px 12px; border-bottom:1px solid #eef1f5; font-size:12.5px; color:#3d4a5c; }
+  .sh-test li b{ min-width:22px; }
+  .sh-test li .ok{ color:#177a4c; } .sh-test li .no{ color:#b42323; }
   .sd-foot{ margin-top:20px; text-align:center; font-size:12.5px; color:#2c3a4d; }
 
   @media (max-width:1240px){ .sd-sections{ grid-template-columns:1fr; } }
@@ -146,6 +153,10 @@
     </section>
   </div>
   <p class="sd-foot">Numbers come from the same refresh as Integrations Status &ndash; Orders. Sales and transfer orders are added together here.</p>
+  <div class="sh-test">
+    <button type="button" id="shTestBtn">Test Shopify connection</button>
+    <ol id="shTestOut" aria-live="polite"></ol>
+  </div>
 </main>
 
 <script src="app.js?v=69"></script>
@@ -437,6 +448,21 @@ document.getElementById('shopFile').addEventListener('change', async e => {
   } catch(err){
     say(`Upload stopped: ${err.message}`);
   }
+});
+
+document.getElementById('shTestBtn').addEventListener('click', async e => {
+  const out = document.getElementById('shTestOut');
+  e.target.disabled = true;
+  out.innerHTML = '<li>Running Jordan\u2019s steps 1\u20134\u2026</li>';
+  try{
+    const r = await (await fetch('/api/shopify-test')).json();
+    if(!r.steps) throw new Error(r.error || 'No result');
+    out.innerHTML = r.steps.map(s => `<li><b>${escapeHtml(String(s.step))}</b><span class="${s.ok ? 'ok' : 'no'}">${s.ok ? '\u2705' : '\u274C'}</span><span><strong>${escapeHtml(s.name)}:</strong> ${escapeHtml(s.detail)}</span></li>`).join('')
+      + `<li><b></b><span></span><span><strong>${r.ok ? 'All steps passed.' : 'Something failed. Send Jordan the step number and message above.'}</strong></span></li>`;
+  } catch(err){
+    out.innerHTML = `<li>Test couldn\u2019t run: ${escapeHtml(err.message)}</li>`;
+  }
+  e.target.disabled = false;
 });
 
 async function loadLive(savedAt){

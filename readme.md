@@ -570,3 +570,13 @@ copies, and an update with no NetSuite changes leaves the saved copy untouched.
   Sale = in-store sale.
 - ns-shop v4: forced re-pull (the v3 re-pull happened before 5055 was edited).
   Also: any saved copy re-pulls in full when its search gains a new column.
+
+## Shopify API (BYLT Reporting app, read-only)
+Env vars: SHOPIFY_STORE, SHOPIFY_CLIENT_ID, SHOPIFY_CLIENT_SECRET (secret).
+lib/clients.mjs trades the Client ID/Secret for an access token (client
+credentials grant), caches it in Blobs (bylt-refresh: shopify:token), renews it
+an hour before its ~24h expiry or immediately on a 401. API version 2026-10.
+Systems > "Test Shopify connection" (/api/shopify-test) runs Jordan's steps 1-4
+(token, the four scopes, a first call, one query per scope) and shows pass/fail.
+It never shows the token or the secret. Pulling orders hourly comes next, once
+this passes.

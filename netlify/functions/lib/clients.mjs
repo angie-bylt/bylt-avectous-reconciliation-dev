@@ -98,3 +98,55 @@ export async function avPage({ report, pageIndex, pageLimit, parameters, timeout
     hasMore: String(page.hasMorePages ?? page.HasMorePages).toLowerCase() === 'true'
   };
 }
+
+
+// ---------- Shopify (read-only "BYLT Reporting" app, Admin GraphQL API) ----------
+// The Client ID/Secret are traded for an access token that lasts ~24 hours
+// (client credentials grant). The token is cached server-side in Blobs and
+// replaced 1 hour before it expires, or straight away if Shopify answers 401.
+// The Client Secret and token never leave Netlify.
+export const SHOPIFY_API_VERSION = '2026-10';
+
+async function newShopifyToken() {
+  const shop = process.env.SHOPIFY_STORE;
+  const id = process.env.SHOPIFY_CLIENT_ID;
+  const secret = process.env.SHOPIFY_CLIENT_SECRET;
+  if (!shop || !id || !secret) throw new Error('Missing SHOPIFY_STORE, SHOPIFY_CLIENT_ID or SHOPIFY_CLIENT_SECRET in Netlify environment variables.');
+  const body = new URLSearchParams({ grant_type: 'client_credentials', client_id: id.trim(), client_secret: secret.trim() });
+  const res = await fetch(`https://${shop.trim()}/admin/oauth/access_token`, {
+    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body
+  });
+  const text = await res.text();
+  let data = null; try { data = JSON.parse(text); } catch {}
+  if (!res.ok || !data || !data.access_token) {
+    const why = (data && (data.error_description || data.error || data.errors)) || text.slice(0, 200);
+    const e = new Error(`Shopify token request failed (${res.status}): ${typeof why === 'string' ? why : JSON.stringify(why)}`);
+    e.step = 1; throw e;
+  }
+  return { token: data.access_token, scope: data.scope || '', expiresAt: Date.now() + (Number(data.expires_in) || 86399) * 1000 };
+}
+
+export async function shopifyToken(store, { force = false } = {}) {
+  let t = !force && store ? await store.get('shopify:token', { type: 'json' }).catch(() => null) : null;
+  if (!t || !t.token || t.expiresAt - Date.now() < 60 * 60 * 1000) {
+    t = await newShopifyToken();
+    if (store) await store.setJSON('shopify:token', t);
+  }
+  return t;
+}
+
+export async function shopifyGraphQL(store, query, variables) {
+  const shop = (process.env.SHOPIFY_STORE || '').trim();
+  const call = async tok => fetch(`https://${shop}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': tok },
+    body: JSON.stringify({ query, variables })
+  });
+  let t = await shopifyToken(store);
+  let res = await call(t.token);
+  if (res.status === 401) { t = await shopifyToken(store, { force: true }); res = await call(t.token); }
+  const text = await res.text();
+  let data = null; try { data = JSON.parse(text); } catch {}
+  if (!res.ok || !data) throw new Error(`Shopify API ${res.status}: ${text.slice(0, 200)}`);
+  return data;   // { data, errors, extensions }
+}
