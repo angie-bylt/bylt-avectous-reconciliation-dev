@@ -568,3 +568,5 @@ copies, and an update with no NetSuite changes leaves the saved copy untouched.
 - Search 5055 returns Location as an id. DC = 431 (810 Texas DC) or 437 (811
   Wholesale Texas DC), matched by id or by name; any other location on a Cash
   Sale = in-store sale.
+- ns-shop v4: forced re-pull (the v3 re-pull happened before 5055 was edited).
+  Also: any saved copy re-pulls in full when its search gains a new column.

@@ -48,8 +48,9 @@ const isOpen = s => !FINAL_STATUSES.includes(String(s || '').trim().toLowerCase(
 
 // Bump a source's version when its saved search criteria change, so the next
 // refresh re-pulls it in full once instead of only adding changed orders.
-// shop v3: customsearch5055 covers all locations and has a Location column (Oct 12).
-const SOURCE_VERSION = { 'ns-shop': 3 };
+// shop v4: re-pull 5055 after it was widened to all locations (the v3 re-pull ran
+// before the search was edited, so it saved the old 810-only rows).
+const SOURCE_VERSION = { 'ns-shop': 4 };
 
 const NS_LABEL = { so: 'NetSuite sales orders', to: 'NetSuite transfer orders', shop: 'NetSuite Shopify check (sales orders + cash sales)' };
 
@@ -191,6 +192,7 @@ async function stepNs(ctx, step, cur) {
         old = await readTable(store, key);
         if (!old) why = `no saved copy found (snap:${key} missing)`;
         else if ((old.version || 1) < (SOURCE_VERSION[key] || 1)) why = 'the search was changed since the saved copy was made';
+        else if (headers.some(h => !old.headers.includes(h))) why = `the search has new columns (${headers.filter(h => !old.headers.includes(h)).join(', ')})`;
         else if (!nsIdColumn(old.headers) || !nsIdColumn(headers)) why = `no order id column (${old.headers.length} columns: ${old.headers.slice(0, 6).join(', ')}...)`;
       } catch (err) { why = err.message; }
       if (why) {
