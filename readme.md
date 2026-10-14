@@ -653,3 +653,6 @@ Dependency: nodemailer 6.9.14 (package.json).
   smaller pages (1,000 -> 500 -> 250 -> 125 rows), keeping its place, and goes back
   to 1,000 for the next order date. Before this, a heavy day (e.g. Oct 11) could
   time out 6 times in a row and stop the refresh.
+- Oct 14: Systems > "Send summary to Slack" posts the daily summary now from the
+  latest saved numbers (/api/alert-test?summary=1). Doesn't affect the 7:30 AM
+  schedule or its "since yesterday" comparison.
