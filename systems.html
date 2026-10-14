@@ -158,6 +158,7 @@
   <p class="sd-foot">Numbers come from the same refresh as Integrations Status &ndash; Orders. Sales and transfer orders are added together here.</p>
   <div class="sh-test">
     <button type="button" id="shTestBtn">Test Shopify connection</button>
+    <button type="button" id="alertTestBtn">Send test alert</button>
     <ol id="shTestOut" aria-live="polite"></ol>
   </div>
 </main>
@@ -507,6 +508,18 @@ document.getElementById('shTestBtn').addEventListener('click', async e => {
   } catch(err){
     out.innerHTML = `<li>Test couldn\u2019t run: ${escapeHtml(err.message)}</li>`;
   }
+  e.target.disabled = false;
+});
+
+document.getElementById('alertTestBtn').addEventListener('click', async e => {
+  const out = document.getElementById('shTestOut');
+  e.target.disabled = true;
+  out.innerHTML = '<li>Sending a test alert\u2026</li>';
+  try{
+    const r = await (await fetch('/api/alert-test', { method: 'POST' })).json();
+    out.innerHTML = r.ok ? `<li><span class="ok">\u2705</span><span>Test alert sent to ${escapeHtml(r.to)}.</span></li>`
+                         : `<li><span class="no">\u274C</span><span>${escapeHtml(r.error || 'Failed')}</span></li>`;
+  } catch(err){ out.innerHTML = `<li>Couldn\u2019t send: ${escapeHtml(err.message)}</li>`; }
   e.target.disabled = false;
 });
 

@@ -620,3 +620,19 @@ this passes.
   be sent / Avectous sent it, NetSuite didn't record it (check Tim's RESTlet log).
   Shown on both Avectous -> NetSuite cards; exports add reason, message,
   confirmation date and carrier columns.
+
+## Email alerts (lib/alerts.mjs)
+From NS_Alerts@byltbasics.com through smtp.gmail.com with a Google app password.
+Env vars (live only, so Dev and live don't both send): ALERT_SMTP_USER,
+ALERT_SMTP_PASS (secret), ALERT_TO (comma-separated). Missing any = alerts off.
+Card alerts after each saved refresh: a Systems card under 99% made it across ->
+one email; daily reminder while it stays under; one email when back at 99%+.
+Refresh alerts: the refresh stops with an error or runs over 2 hours -> one
+email; one more when it finishes normally again. State in bylt-refresh
+"alerts:state". Email failures are only noted in Recent activity, never block
+the refresh. Systems > "Send test alert email" (/api/alert-test) checks setup.
+Dependency: nodemailer 6.9.14 (package.json).
+- Oct 14: alerts go to Slack via an Incoming Webhook: env var ALERT_SLACK_WEBHOOK
+  (live only). Email through NS_Alerts stays available as a fallback (the three
+  ALERT_SMTP_* / ALERT_TO variables) if Slack isn't set. Same rules as above.
+  Systems > "Send test alert" checks the setup.

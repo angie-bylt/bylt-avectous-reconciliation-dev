@@ -530,6 +530,7 @@ async function stepReasons(ctx, step, cur) {
   if (prev && prev.result) compute.attachPrev(parked.result, prev.result, prev.savedAt);
   await results.setJSON(parked.id, { result: parked.result, savedAt: new Date().toISOString(), ranBy: 'Auto-refresh' });
   await store.delete('work:integrations').catch(() => {});
+  if (ctx.alerts) { try { await ctx.alerts.checkCards(store, parked.result, n => ctx.note(n)); } catch (err) { ctx.note(`Alert check failed: ${err.message}`); } }
   ctx.note(`Integrations Status updated (${cur.todo.length} missing orders and ${cur.fTodo.length} missing shipments checked with Avectous)`);
   return true;
 }
@@ -635,7 +636,7 @@ const STEP_FN = { ns: stepNs, avo: stepAvo, shp: stepShp, shopify: stepShopify, 
 const STEP_EST = { ns: EST.ns, avo: EST.av, shp: EST.av, shopify: 9000, resolve: EST.av, compute: EST.compute, reasons: EST.av };
 
 // ---------- one run ----------
-export async function runTick({ store, results, clients, compute, now = () => Date.now() }) {
+export async function runTick({ store, results, clients, compute, alerts = null, now = () => Date.now() }) {
   const t0 = now();
   const st = await getState(store);
   if (st.lockUntil && st.lockUntil > t0) return { skipped: 'locked' };
@@ -648,7 +649,7 @@ export async function runTick({ store, results, clients, compute, now = () => Da
 
   const notes = [];
   const ctx = {
-    store, results, clients, compute, st,
+    store, results, clients, compute, alerts, st,
     progress: st.progress,
     note: m => notes.push(`${new Date(now()).toISOString()} ${m}`),
     timeLeft: () => HARD_LIMIT_MS - (now() - t0)
@@ -717,6 +718,8 @@ export async function runTick({ store, results, clients, compute, now = () => Da
       }
     }
     st.progress = st.status === 'running' ? ctx.progress : '';
+    // Email alerts about the refresh itself (stopped / too long / running again).
+    if (alerts) { try { await alerts.checkRefresh(store, st, n => ctx.note(n)); } catch (err) { ctx.note(`Alert check failed: ${err.message}`); } }
   } finally {
     st.history = [...notes, ...(st.history || [])].slice(0, 40);
     st.lockUntil = 0;
