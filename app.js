@@ -2449,8 +2449,17 @@ function computeShopifyAudit(soData, shopRows, meta, nsAllData){
     if(ok) g.matched++;
     else { g.missing++; g.rows.push([o.key, o.id, s.day, o.status, s.status]); }
   });
+  // Most recent Shopify order NetSuite has created: shows orders are flowing right now.
+  let lastInNetSuite = null, lastInNetSuiteName = null;
+  ns.byKey.forEach(o => {
+    if(!shopBy.has(o.key)) return;
+    const d = asDate(o.createdAt);
+    if(d && !isNaN(d) && (!lastInNetSuite || d > lastInNetSuite)){ lastInNetSuite = d; lastInNetSuiteName = o.key; }
+  });
+
   for(const g of [inb.online, inb.other, out.online, out.other]) g.rows.sort((a, b) => String(a[s2i(a)]).localeCompare(String(b[s2i(b)])));
   function s2i(r){ return r.length === 3 ? 1 : 2; }
 
-  return { inbound: inb, outbound: out, through, skipped, cancelled, inStoreSales, checkedAgainst, source: (meta && meta.source) || 'upload', uploadedAt: meta && meta.uploadedAt || null, files: meta && meta.files || null };
+  return { inbound: inb, outbound: out, through, skipped, cancelled, inStoreSales, checkedAgainst,
+    lastInNetSuite: lastInNetSuite ? lastInNetSuite.toISOString() : null, lastInNetSuiteName, source: (meta && meta.source) || 'upload', uploadedAt: meta && meta.uploadedAt || null, files: meta && meta.files || null };
 }

@@ -599,3 +599,9 @@ this passes.
   Safety net for every step: a run cut off by the time limit leaves its lock set;
   after 3 cut-offs in a row the Shopify step is skipped for the hour, and any other
   step stops the refresh with a note, instead of hanging silently.
+- Oct 14: Shopify -> NetSuite card shows "Last Shopify order in NetSuite": the
+  newest NetSuite Date Created among orders whose PO/Check Number is a Shopify
+  order, with how long before the refresh it was (amber if over an hour).
+- Oct 14: the aged box is two reports, Sales orders (online; wholesale counted in
+  the export) and Transfer orders, each with its own oldest age, count and export
+  (BYLT_SO_Aging_In_Avectous / BYLT_TO_Aging_In_Avectous).

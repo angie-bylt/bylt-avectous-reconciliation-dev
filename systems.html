@@ -80,6 +80,9 @@
   .aged .nums .v{ font-size:20px; font-weight:800; color:#94570a; line-height:1.15; }
   .aged .nums .k{ font-size:11.5px; color:var(--muted); }
   .aged .sub{ font-size:11.5px; color:var(--muted); margin-top:7px; }
+  .aged-part{ margin-top:10px; padding-top:10px; border-top:1px solid #e6eaf0; }
+  .aged-part:first-of-type{ border-top:0; padding-top:0; }
+  .aged-h{ font-size:12.5px; font-weight:800; color:var(--navy); }
   .aged button{ margin-top:9px; width:100%; border:1px solid #c9d1dc; background:#fff; color:var(--navy); border-radius:20px; padding:6px; font-size:12.5px; font-weight:700; cursor:pointer; }
   .spacer{ flex:1; min-height:16px; }
   .sd-export{ width:100%; border:1.5px solid var(--navy); background:#fff; color:var(--navy); border-radius:30px; padding:9px; font-size:14px; font-weight:700; cursor:pointer; }
@@ -194,7 +197,7 @@ const SYNC_HEADERS   = ['Order Number','NetSuite Internal ID','Order Date','Orde
 const REASON_HEADERS = SYNC_HEADERS.concat(["Why it's missing", 'Avectous message', 'Avectous attempt']);
 const FULFIL_HEADERS = ['Order Number','NetSuite Internal ID','Avectous Ship Date','Order Date','NetSuite Status','WMS Status','Age'];
 const AGED_HEADERS   = ['Order Number','Order Date','Avectous Status','Order Type','Channel'];
-let current = null;
+let current = null, s0 = null;
 
 function pendingCard(from, to, rows){
   return `<div class="sd-card pending">
@@ -260,17 +263,40 @@ function queueCard({ from, to, so, toq, leftLabel, rightLabel, exportId, reasons
   </div>`;
 }
 
+// When NetSuite created its most recent Shopify order, compared with when these
+// numbers were saved. Amber if more than an hour before (orders may have stopped).
+function lastOrderChip(sh, savedAt){
+  if(!sh || !sh.lastInNetSuite) return '';
+  const t = new Date(sh.lastInNetSuite);
+  const when = t.toLocaleString([], { weekday:'short', month:'numeric', day:'numeric', hour:'numeric', minute:'2-digit' });
+  const gap = savedAt ? Math.max(0, Math.round((Date.parse(savedAt) - t) / 60000)) : null;
+  const gapText = gap === null ? '' : gap < 60 ? `, ${gap} min before this refresh` : `, ${Math.round(gap / 60)} hr before this refresh`;
+  return `<div class="sd-chip ${gap !== null && gap > 60 ? 'age' : 'wh'}">${CLOCK}<span>Last Shopify order in NetSuite: <b>${when}</b>${gapText} (${escapeHtml(sh.lastInNetSuiteName || '')})</span></div>`;
+}
+
+// Orders in Avectous that haven't shipped though the warehouse has moved past
+// their order date. Two reports: sales orders (online; wholesale noted) and
+// transfer orders, each with its own oldest age, count and export.
+function agedPart(title, list, note, exportId){
+  const n = (list || []).length;
+  const oldest = n ? daysSince(list[0][1]) : null;
+  return `<div class="aged-part">
+    <div class="aged-h">${title}</div>
+    <div class="nums">
+      <div><div class="v">${n ? plural(oldest, 'day') : '\u2014'}</div><div class="k">oldest</div></div>
+      <div><div class="v">${fmt(n)}</div><div class="k">waiting</div></div>
+    </div>
+    ${note ? `<div class="sub">${note}</div>` : ''}
+    <button type="button" data-export="${exportId}" ${n ? '' : 'disabled'}>Export ${title.toLowerCase()} aging</button>
+  </div>`;
+}
 function agedBox(g){
   if(!g) return '';
-  const oldest = daysSince(g.oldestDay);
+  const ws = (g.wholesale || []).length;
   return `<div class="aged">
-    <div class="top">${CLOCK}<span>In Avectous but not shipped yet</span></div>
-    <div class="nums">
-      <div><div class="v">${g.count ? plural(oldest, 'day') : '\u2014'}</div><div class="k">oldest unshipped order</div></div>
-      <div><div class="v">${fmt(g.count)}</div><div class="k">online orders placed before ${fmtDay(g.cutoff)}</div></div>
-    </div>
-    <div class="sub">Still open in Avectous though the warehouse has moved on to ${fmtDay(g.base)} orders.${(g.wholesale || []).length || (g.transfer || []).length ? ` Plus ${fmt((g.wholesale || []).length)} wholesale and ${fmt((g.transfer || []).length)} transfer orders in the export.` : ''}</div>
-    <button type="button" data-export="aged" ${g.count || (g.wholesale || []).length || (g.transfer || []).length ? '' : 'disabled'}>Export aged orders</button>
+    <div class="top">${CLOCK}<span>In Avectous but not shipped yet, placed before ${fmtDay(g.cutoff)}</span></div>
+    ${agedPart('Sales orders', g.rows, ws ? `Online orders. Plus ${fmt(ws)} wholesale in the export.` : 'Online orders.', 'agedSO')}
+    ${agedPart('Transfer orders', g.transfer, '', 'agedTO')}
   </div>`;
 }
 
@@ -301,7 +327,8 @@ function render(){
   inc.innerHTML =
     (sh ? queueCard({ from: 'Shopify', to: 'NetSuite', so: sh.inbound.online, toq: sh.inbound.other,
         leftLabel: 'Shopify orders 810 ships', rightLabel: 'Orders in NetSuite', exportId: 'shopIn',
-        splitLabels: ['Web orders missing', 'Exchanges & POS missing'], ageCol: 1, ageWord: 'since order date', extra: shopSrc })
+        splitLabels: ['Web orders missing', 'Exchanges & POS missing'], ageCol: 1, ageWord: 'since order date',
+        extra: lastOrderChip(sh, s0 && s0.savedAt) + shopSrc })
       : pendingCard('Shopify', 'NetSuite', ['Orders in Shopify', 'Orders in NetSuite'])) +
     queueCard({ from: 'NetSuite', to: 'Avectous', so: a.soSync, toq: a.toSync,
       leftLabel: 'Orders in NetSuite', rightLabel: 'Orders in Avectous',
@@ -347,6 +374,16 @@ function exportList(kind){
     XLSX.utils.book_append_sheet(wb, sheet(H, g.online.rows), 'Web orders');
     XLSX.utils.book_append_sheet(wb, sheet(H, g.other.rows), 'Exchanges & POS');
     XLSX.writeFile(wb, kind === 'shopIn' ? `BYLT_Shopify_to_NetSuite_Missing_${day}.xlsx` : `BYLT_NetSuite_to_Shopify_Missing_${day}.xlsx`);
+  } else if(kind === 'agedSO'){
+    const g = current.agedOpen;
+    XLSX.utils.book_append_sheet(wb, sheet(AGED_HEADERS, g.rows), 'Online orders');
+    XLSX.utils.book_append_sheet(wb, sheet(AGED_HEADERS, g.wholesale || []), 'Wholesale');
+    XLSX.writeFile(wb, `BYLT_SO_Aging_In_Avectous_${day}.xlsx`);
+    return;
+  } else if(kind === 'agedTO'){
+    XLSX.utils.book_append_sheet(wb, sheet(AGED_HEADERS, current.agedOpen.transfer || []), 'Transfer orders');
+    XLSX.writeFile(wb, `BYLT_TO_Aging_In_Avectous_${day}.xlsx`);
+    return;
   } else if(kind === 'aged'){
     const g = current.agedOpen;
     XLSX.utils.book_append_sheet(wb, sheet(AGED_HEADERS, g.rows), 'Online orders');
@@ -485,6 +522,7 @@ async function loadLive(savedAt){
 async function load(){
   const shared = await loadSharedResults();
   const s = shared[INTEGRATIONS.id];
+  s0 = s || null;
   current = s ? s.result : null;
   document.getElementById('asOf').textContent = s
     ? `Last updated ${new Date(s.savedAt).toLocaleString([], { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' })}${s.ranBy ? ' by ' + s.ranBy : ''}`
