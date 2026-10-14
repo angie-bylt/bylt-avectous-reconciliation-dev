@@ -168,8 +168,12 @@
         ()=> sheet(SYNC_HEADERS.concat(['Hold type']),
              (a.soSync.heldButSentRows || []).concat(a.toSync.heldButSentRows || [])));
       add(wb, 'TO Sync Missing',         ()=> syncSheet(a.toSync.rows));
-      add(wb, 'SO Fulfillments Missing', ()=> sheet(FULFIL_HEADERS, a.soFulfil.rows));
-      add(wb, 'TO Fulfillments Missing', ()=> sheet(FULFIL_HEADERS, a.toFulfil.rows));
+      // Fulfillment lists carry the reason from Avectous's Shipment Confirmations log.
+      const FULFIL_REASON_HEADERS = FULFIL_HEADERS.concat(["Why it's missing", 'Avectous message', 'Confirmation date', 'Carrier']);
+      const fulfilSheet = rows => sheet((rows || []).some(r => r.length > 7) ? FULFIL_REASON_HEADERS : FULFIL_HEADERS, rows || []);
+      add(wb, 'SO Fulfillments Missing', ()=> fulfilSheet(a.soFulfil.rows));
+      add(wb, 'TO Fulfillments Missing', ()=> fulfilSheet(a.toFulfil.rows));
+      add(wb, 'Shipped Today (On the Way)', ()=> sheet(FULFIL_HEADERS, (a.soFulfil.onTheWayRows || []).concat(a.toFulfil.onTheWayRows || [])));
       const testSet = new Set(current.orphans.tests.map(r => r[0]));
       const orphanRows = current.orphans.sync.concat(current.orphans.ship)
         .map(r => r.concat([ testSet.has(r[0]) ? 'Avectous test order' : 'Created after the NetSuite pull' ]));

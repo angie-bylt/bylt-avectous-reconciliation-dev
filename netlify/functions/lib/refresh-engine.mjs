@@ -488,6 +488,36 @@ async function stepReasons(ctx, step, cur) {
     ctx.progress = `Asking Avectous why orders are missing: ${cur.i} of ${cur.todo.length}`;
     return false;
   }
+  // Then the shipments that didn't reach NetSuite: ask Avectous's Shipment
+  // Confirmations log about each one (same 3-hour cache idea, its own cache).
+  const fcache = (await store.get('freasons-cache', { type: 'json' })) || {};
+  if (!cur.fTodo) {
+    const list = compute.fulfilMissing(parked.result).slice(0, REASON_CAP);
+    const nowMs = Date.now();
+    cur.fList = list;
+    cur.fTodo = list.filter(m => !fcache[m.order] || nowMs - Date.parse(fcache[m.order].checkedAt) > REASON_TTL_MS);
+    cur.fi = 0;
+  }
+  if (cur.fi < cur.fTodo.length) {
+    const m = cur.fTodo[cur.fi];
+    let why;
+    try {
+      const page = await clients.avPage({ report: 'confirmations', pageIndex: 1, pageLimit: 50, parameters: { OrderNumber: m.order }, timeoutMs: ctx.timeLeft() - 1500 });
+      why = compute.summarizeConfirmations(page.rows.filter(r => String(r.OrderNumber) === m.order));
+    } catch (err) {
+      why = { label: 'Not checked yet', detail: `Avectous lookup failed: ${err.message}`, at: '', carrier: '' };
+    }
+    fcache[m.order] = { ...why, checkedAt: new Date().toISOString() };
+    await store.setJSON('freasons-cache', fcache);
+    cur.fi++;
+    ctx.progress = `Asking Avectous why shipments didn't reach NetSuite: ${cur.fi} of ${cur.fTodo.length}`;
+    return false;
+  }
+  const fkeep = {};
+  for (const m of cur.fList) if (fcache[m.order]) fkeep[m.order] = fcache[m.order];
+  await store.setJSON('freasons-cache', fkeep);
+  compute.applyFulfilReasons(parked.result, fkeep);
+
   const reasons = {};
   for (const m of cur.list) if (cache[m.order]) reasons[m.order] = cache[m.order];
   // Keep the cache to orders still missing.
@@ -500,7 +530,7 @@ async function stepReasons(ctx, step, cur) {
   if (prev && prev.result) compute.attachPrev(parked.result, prev.result, prev.savedAt);
   await results.setJSON(parked.id, { result: parked.result, savedAt: new Date().toISOString(), ranBy: 'Auto-refresh' });
   await store.delete('work:integrations').catch(() => {});
-  ctx.note(`Integrations Status updated (${cur.todo.length} missing orders checked with Avectous)`);
+  ctx.note(`Integrations Status updated (${cur.todo.length} missing orders and ${cur.fTodo.length} missing shipments checked with Avectous)`);
   return true;
 }
 

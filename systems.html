@@ -196,6 +196,7 @@ const statusBadge = k => `<span class="sd-status ${k}"><span class="emo" aria-hi
 const SYNC_HEADERS   = ['Order Number','NetSuite Internal ID','Order Date','Order Type','NetSuite Status','WMS Status','WMS Export Date'];
 const REASON_HEADERS = SYNC_HEADERS.concat(["Why it's missing", 'Avectous message', 'Avectous attempt']);
 const FULFIL_HEADERS = ['Order Number','NetSuite Internal ID','Avectous Ship Date','Order Date','NetSuite Status','WMS Status','Age'];
+const FULFIL_REASON_HEADERS = FULFIL_HEADERS.concat(["Why it's missing", 'Avectous message', 'Confirmation date', 'Carrier']);
 const AGED_HEADERS   = ['Order Number','Order Date','Avectous Status','Order Type','Channel'];
 let current = null, s0 = null;
 
@@ -220,11 +221,11 @@ function oldestDay(rows, col){
   return min;
 }
 
-function queueCard({ from, to, so, toq, leftLabel, rightLabel, exportId, reasons, prev, ageCol, ageWord, extra, splitLabels }){
+function queueCard({ from, to, so, toq, leftLabel, rightLabel, exportId, reasons, prev, ageCol, ageWord, extra, splitLabels, extraRow }){
   const total = sum(so, toq, 'total');
   const matched = sum(so, toq, 'matched');
   const missing = sum(so, toq, 'missing');
-  const pct = total ? (matched / total) * 100 : null;
+  const pct = total ? ((total - missing) / total) * 100 : null;
   const tone = !missing ? 'ok' : missing < 100 ? 'warn' : 'bad';
   const pctTone = pct === null ? 'warn' : pct >= 99 ? '' : pct >= 97 ? 'warn' : 'bad';
 
@@ -249,6 +250,7 @@ function queueCard({ from, to, so, toq, leftLabel, rightLabel, exportId, reasons
     <div class="sd-rows">
       <div class="sd-row"><span>${leftLabel}</span><span class="v">${fmt(total)}</span></div>
       <div class="sd-row"><span>${rightLabel}</span><span class="v">${fmt(matched)}</span></div>
+      ${extraRow ? `<div class="sd-row"><span>${extraRow[0]}</span><span class="v" style="color:var(--muted);">${fmt(extraRow[1])}</span></div>` : ''}
     </div>
     <div class="sd-split">
       <div><div class="k">${(splitLabels || [])[0] || "Sales orders missing"}</div><div class="n ${so && so.missing ? 'bad' : ''}">${fmt(so && so.missing)}</div></div>
@@ -337,7 +339,8 @@ function render(){
   shp.innerHTML =
     queueCard({ from: 'Avectous', to: 'NetSuite', so: a.soFulfil, toq: a.toFulfil,
       leftLabel: 'Shipped in Avectous', rightLabel: 'Recorded in NetSuite',
-      exportId: 'fulfil', prev: prev.fulfil, ageCol: 2, ageWord: 'since it shipped',
+      extraRow: (sum(a.soFulfil, a.toFulfil, 'sameDay')) ? ['Shipped today, on the way', sum(a.soFulfil, a.toFulfil, 'sameDay')] : null,
+      exportId: 'fulfil', prev: prev.fulfil, ageCol: 2, ageWord: 'since it shipped', reasons: reasonList(a.soFulfil, a.toFulfil),
       extra: (w && w.orderDay ? `<div class="sd-chip wh">${CAL}<span>Warehouse is shipping orders placed <b>${fmtDay(w.orderDay)}</b></span></div>` : '') + agedBox(current.agedOpen) }) +
     (sh ? queueCard({ from: 'NetSuite', to: 'Shopify', so: sh.outbound.online, toq: sh.outbound.other,
         leftLabel: 'Fulfilled in NetSuite', rightLabel: 'Fulfilled in Shopify', exportId: 'shopOut',
@@ -363,8 +366,10 @@ function exportList(kind){
     XLSX.utils.book_append_sheet(wb, sheet(pick(a.toSync.rows), a.toSync.rows), 'Transfer orders');
     XLSX.writeFile(wb, `BYLT_NetSuite_to_Avectous_Missing_${day}.xlsx`);
   } else if(kind === 'fulfil'){
-    XLSX.utils.book_append_sheet(wb, sheet(FULFIL_HEADERS, a.soFulfil.rows), 'Sales orders');
-    XLSX.utils.book_append_sheet(wb, sheet(FULFIL_HEADERS, a.toFulfil.rows), 'Transfer orders');
+    const fh = rows => (rows || []).some(r => r.length > 7) ? FULFIL_REASON_HEADERS : FULFIL_HEADERS;
+    XLSX.utils.book_append_sheet(wb, sheet(fh(a.soFulfil.rows), a.soFulfil.rows), 'Sales orders');
+    XLSX.utils.book_append_sheet(wb, sheet(fh(a.toFulfil.rows), a.toFulfil.rows), 'Transfer orders');
+    XLSX.utils.book_append_sheet(wb, sheet(FULFIL_HEADERS, [].concat(a.soFulfil.onTheWayRows || [], a.toFulfil.onTheWayRows || [])), 'Shipped today (on the way)');
     XLSX.writeFile(wb, `BYLT_Avectous_to_NetSuite_Missing_${day}.xlsx`);
   } else if(kind === 'shopIn' || kind === 'shopOut'){
     const sh = current.shopify;

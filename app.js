@@ -2053,7 +2053,7 @@ function computeIntegrations(soData, toData, syncData, shipData){
   // fulfillment in NetSuite. Anything shipped before today has had far
   // longer than the queue interval to arrive.
   function fulfilAudit(nsSide, label){
-    const missing = [], cancelledRows = [], noShipRecord = [];
+    const missing = [], cancelledRows = [], noShipRecord = [], onTheWay = [];
     let shipped = 0, recorded = 0, sameDay = 0;
     nsSide.byKey.forEach(o=>{
       const a = av.ship.byKey.get(o.key);
@@ -2076,18 +2076,23 @@ function computeIntegrations(soData, toData, syncData, shipData){
       if(o.fulfilled){ recorded++; return; }
       // No ship date means the shipments file had no recognisable date column,
       // so age can't be judged. Labelling it "Overdue" would be a guess.
+      // Shipped today: NetSuite records ship confirmations in batches, so these
+      // are normally on their way, not missing (Oct 14: 257 of 258 "today"
+      // orders were fulfilled in NetSuite within hours). Listed separately.
       const isToday = a.day && a.day >= today;
-      if(isToday) sameDay++;
       const age = !a.day ? 'Unknown' : (isToday ? 'Today' : 'Overdue');
-      missing.push([o.key, o.id, a.day || '', o.orderDay || '', o.status, o.wms, age]);
+      const row = [o.key, o.id, a.day || '', o.orderDay || '', o.status, o.wms, age];
+      if(isToday){ sameDay++; onTheWay.push(row); }
+      else missing.push(row);
     });
     missing.sort((a,b)=> String(a[2]).localeCompare(String(b[2])));
+    onTheWay.sort((a,b)=> String(a[0]).localeCompare(String(b[0])));
     noShipRecord.sort((a,b)=> String(a[2]).localeCompare(String(b[2])));
     return { label, direction:'Avectous \u2192 NetSuite', total: shipped, matched: recorded,
-             missing: missing.length, overdue: missing.length - sameDay, sameDay,
+             missing: missing.length, overdue: missing.length, sameDay, onTheWayRows: onTheWay,
              cancelled: cancelledRows.length, cancelledRows,
              noShipRecord: noShipRecord.length, noShipRecordRows: noShipRecord,
-             health: pctOf(recorded, shipped), rows: missing };
+             health: pctOf(shipped - missing.length, shipped), rows: missing };
   }
 
   // Avectous's own status for every NetSuite order that reached it.
@@ -2462,4 +2467,66 @@ function computeShopifyAudit(soData, shopRows, meta, nsAllData){
 
   return { inbound: inb, outbound: out, through, skipped, cancelled, inStoreSales, checkedAgainst,
     lastInNetSuite: lastInNetSuite ? lastInNetSuite.toISOString() : null, lastInNetSuiteName, source: (meta && meta.source) || 'upload', uploadedAt: meta && meta.uploadedAt || null, files: meta && meta.files || null };
+}
+
+
+// ---------- Why shipments didn't reach NetSuite (Avectous "Shipment Confirmations") ----------
+// Avectous page 11910 logs every ship confirmation it creates for NetSuite:
+// Uploaded (sent or not), LoadingResult (Avectous's error when it couldn't send),
+// RecordDate, carrier. Success is never filled in, so whether NetSuite accepted
+// a sent confirmation has to come from NetSuite's own log (Tim's RESTlet).
+const FULFIL_REASON = {
+  none:    'No confirmation in Avectous',
+  costErr: "Avectous couldn't send it: shipping cost failed",
+  error:   "Avectous couldn't send it: an error",
+  waiting: 'Waiting in Avectous to be sent',
+  sent:    "Avectous sent it, NetSuite didn't record it"
+};
+
+function fulfilMissingOrders(result){
+  const out = [];
+  if(!result || !result.audits) return out;
+  for(const key of ['soFulfil', 'toFulfil']){
+    const a = result.audits[key];
+    if(!a || !Array.isArray(a.rows)) continue;
+    for(const r of a.rows) out.push({ order: String(r[0]) });
+  }
+  return out;
+}
+
+// records: Shipment Confirmations rows for one order (there can be several, one per shipment).
+function summarizeConfirmations(records){
+  const fmtAt = v => { const t = String(v || '').replace('T', ' ').slice(0, 16); return t; };
+  if(!records || !records.length) return { label: FULFIL_REASON.none, detail: '', at: '', carrier: '' };
+  const failed = records.filter(r => !r.Uploaded && r.LoadingResult);
+  const waiting = records.filter(r => !r.Uploaded && !r.LoadingResult);
+  const latest = list => list.slice().sort((a, b) => String(b.RecordDate).localeCompare(String(a.RecordDate)))[0];
+  if(failed.length){
+    const r = latest(failed);
+    const msg = String(r.LoadingResult);
+    return { label: /FailedShippingCost/i.test(msg) ? FULFIL_REASON.costErr : FULFIL_REASON.error, detail: msg, at: fmtAt(r.RecordDate), carrier: r.CarrierName || '' };
+  }
+  if(waiting.length){
+    const r = latest(waiting);
+    return { label: FULFIL_REASON.waiting, detail: `Created ${fmtAt(r.RecordDate)}, not sent yet`, at: fmtAt(r.RecordDate), carrier: r.CarrierName || '' };
+  }
+  const r = latest(records);
+  return { label: FULFIL_REASON.sent, detail: `Sent ${fmtAt(r.RecordDate)}`, at: fmtAt(r.RecordDate), carrier: r.CarrierName || '' };
+}
+
+function applyFulfilReasons(result, reasons){
+  if(!result || !result.audits || !reasons) return result;
+  for(const key of ['soFulfil', 'toFulfil']){
+    const a = result.audits[key];
+    if(!a || !Array.isArray(a.rows)) continue;
+    const counts = {};
+    a.rows = a.rows.map(r => {
+      const why = reasons[String(r[0])];
+      const label = why ? why.label : 'Not checked yet';
+      counts[label] = (counts[label] || 0) + 1;
+      return r.slice(0, 7).concat([label, why ? why.detail : '', why ? why.at : '', why ? why.carrier : '']);
+    });
+    a.reasonCounts = Object.entries(counts).sort((x, y) => y[1] - x[1]).map(([label, count]) => ({ label, count }));
+  }
+  return result;
 }

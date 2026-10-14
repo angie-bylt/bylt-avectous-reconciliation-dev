@@ -605,3 +605,18 @@ this passes.
 - Oct 14: the aged box is two reports, Sales orders (online; wholesale counted in
   the export) and Transfer orders, each with its own oldest age, count and export
   (BYLT_SO_Aging_In_Avectous / BYLT_TO_Aging_In_Avectous).
+- Oct 14: Avectous -> NetSuite "missing" counts only shipments from before today.
+  Today's shipments are listed as "Shipped today, on the way to NetSuite" (NetSuite
+  records ship confirmations in batches; on Oct 14, 257 of 258 "today" orders were
+  fulfilled within hours). Queue health and % made it across count only real
+  missing ones. Today's are on their own export sheet.
+- Oct 14: reasons for Avectous -> NetSuite. Avectous page 11910 "Shipment
+  Confirmations" (PageName "Shipment Confirmations", PanelName "Shipment Header",
+  filter OrderNumber) logs each ship confirmation: Uploaded, LoadingResult (error),
+  RecordDate, CarrierName. Success is never filled in. Step 7 now also looks up
+  each missing shipment (cap 200, 3-hour cache "freasons-cache") and labels it:
+  No confirmation in Avectous / Avectous couldn't send it: shipping cost failed
+  ({"FailedShippingCost":1}, any carrier) / ...an error / Waiting in Avectous to
+  be sent / Avectous sent it, NetSuite didn't record it (check Tim's RESTlet log).
+  Shown on both Avectous -> NetSuite cards; exports add reason, message,
+  confirmation date and carrier columns.

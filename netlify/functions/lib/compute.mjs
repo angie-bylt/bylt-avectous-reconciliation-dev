@@ -42,7 +42,7 @@ function load() {
   ctx.window = ctx;
   ctx.globalThis = ctx;
   vm.createContext(ctx);
-  vm.runInContext(code + '\n;globalThis.__api = { computeIntegrations, computeOrderStatus, stripLedgers, INTEGRATIONS, ORDER_STATUS, norm, summarizeInterfaceRecords, applySyncReasons, syncMissingOrders, computeWarehouseDay, computeAgedOpen, attachPrevMissing, computeShopifyAudit };', ctx);
+  vm.runInContext(code + '\n;globalThis.__api = { computeIntegrations, computeOrderStatus, stripLedgers, INTEGRATIONS, ORDER_STATUS, norm, summarizeInterfaceRecords, applySyncReasons, syncMissingOrders, computeWarehouseDay, computeAgedOpen, attachPrevMissing, computeShopifyAudit, fulfilMissingOrders, summarizeConfirmations, applyFulfilReasons };', ctx);
 
   // Every quoted name in app.js, normalised. A NetSuite column is kept only if
   // the comparison could look it up by one of these names (same matching rules
@@ -134,3 +134,6 @@ export function computeShopify(nsSo, shopify, nsShop) {
   const { api } = load();
   return api.computeShopifyAudit(toObjects(nsSo, true), shopify.rows, shopify, nsShop ? toObjects(nsShop, false) : null);
 }
+export function fulfilMissing(result) { return load().api.fulfilMissingOrders(result); }
+export function summarizeConfirmations(records) { return load().api.summarizeConfirmations(records); }
+export function applyFulfilReasons(result, reasons) { return load().api.applyFulfilReasons(result, reasons); }
