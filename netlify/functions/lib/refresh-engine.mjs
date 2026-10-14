@@ -721,6 +721,8 @@ export async function runTick({ store, results, clients, compute, alerts = null,
     // Email alerts about the refresh itself (stopped / too long / running again).
     if (alerts) { try { await alerts.checkRefresh(store, st, n => ctx.note(n)); } catch (err) { ctx.note(`Alert check failed: ${err.message}`); } }
   } finally {
+    // Daily summary: checked every minute, even between refreshes, so it goes at 9:30 sharp.
+    if (alerts && alerts.checkDaily) { try { await alerts.checkDaily(store, results, now(), n => ctx.note(n)); } catch (err) { ctx.note(`Daily summary failed: ${err.message}`); } }
     st.history = [...notes, ...(st.history || [])].slice(0, 40);
     st.lockUntil = 0;
     await putState(store, st);

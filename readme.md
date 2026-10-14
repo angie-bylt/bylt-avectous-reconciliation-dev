@@ -636,3 +636,9 @@ Dependency: nodemailer 6.9.14 (package.json).
   (live only). Email through NS_Alerts stays available as a fallback (the three
   ALERT_SMTP_* / ALERT_TO variables) if Slack isn't set. Same rules as above.
   Systems > "Send test alert" checks the setup.
+- Oct 14: card statuses match the alert line: All caught up (0 missing), Orders to check
+  (99%+ made it across), Problem (under 99%, which is also when Slack alerts).
+- Daily summary to Slack at 7:30 AM Pacific (alerts.checkDaily, checked every
+  minute from the scheduled run, sent once per day): each card's missing and %,
+  change since the previous morning, oldest missing, top reason, shipped-today
+  count, warehouse order date, and aging in Avectous (SO and TO).

@@ -113,3 +113,89 @@ export async function checkRefresh(store, rs, note) {
     await store.setJSON('alerts:state', st);
   }
 }
+
+// ---------- Daily summary, 7:30 AM Pacific ----------
+// One short message each morning from the latest saved numbers, with the change
+// in missing counts since the previous morning's summary. Sent once per day, the
+// first time a run happens at or after 7:30 AM Pacific.
+const DAILY_AT_MIN = 7 * 60 + 30;   // 7:30 AM Pacific, right after the 6:45 update finishes
+function pacific(ms) {
+  const f = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Los_Angeles', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(new Date(ms));
+  const g = t => (f.find(p => p.type === t) || {}).value;
+  return { day: `${g('year')}-${g('month')}-${g('day')}`, min: (Number(g('hour')) % 24) * 60 + Number(g('minute')) };
+}
+const fmtDay = d => d ? new Date(d + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'numeric', day: 'numeric' }) : '';
+const fmtTime = iso => new Date(iso).toLocaleTimeString('en-US', { timeZone: 'America/Los_Angeles', hour: 'numeric', minute: '2-digit' });
+const n = x => Number(x || 0).toLocaleString();
+const daysSince = (day, today) => day ? Math.max(0, Math.round((Date.parse(today + 'T12:00:00') - Date.parse(day + 'T12:00:00')) / 864e5)) : null;
+function oldestDay(rows, col) { let m = null; for (const r of rows || []) { const d = String(r[col] || '').slice(0, 10); if (/^\d{4}-\d{2}-\d{2}$/.test(d) && (!m || d < m)) m = d; } return m; }
+function topReason(x, y) {
+  const c = {};
+  for (const a of [x, y]) for (const rc of (a && a.reasonCounts) || []) c[rc.label] = (c[rc.label] || 0) + rc.count;
+  const best = Object.entries(c).sort((p, q) => q[1] - p[1])[0];
+  return best ? `${best[0]} (${n(best[1])})` : '';
+}
+
+export function dailySummary(saved, prev, today) {
+  const r = saved.result || {};
+  const a = r.audits || {};
+  const sh = r.shopify && !r.shopify.error ? r.shopify : null;
+  const cards = [
+    { name: 'Shopify \u2192 NetSuite', x: sh && sh.inbound.online, y: sh && sh.inbound.other, col: 1 },
+    { name: 'NetSuite \u2192 Avectous', x: a.soSync, y: a.toSync, col: 2, reasons: true },
+    { name: 'Avectous \u2192 NetSuite', x: a.soFulfil, y: a.toFulfil, col: 2, reasons: true, onTheWay: true },
+    { name: 'NetSuite \u2192 Shopify', x: sh && sh.outbound.online, y: sh && sh.outbound.other, col: 2 }
+  ];
+  const lines = [`Numbers as of ${fmtTime(saved.savedAt)}`, ''];
+  const counts = {};
+  for (const c of cards) {
+    if (!c.x && !c.y) continue;
+    const total = ((c.x && c.x.total) || 0) + ((c.y && c.y.total) || 0);
+    const missing = ((c.x && c.x.missing) || 0) + ((c.y && c.y.missing) || 0);
+    if (!total) continue;
+    const pct = ((total - missing) / total) * 100;
+    counts[c.name] = missing;
+    const icon = pct < ALERT_LINE ? '\uD83D\uDEA8' : missing ? '\uD83D\uDD0D' : '\u2705';   // problem / orders to check / all caught up
+    let change = '';
+    if (prev && prev[c.name] !== undefined) {
+      const d = missing - prev[c.name];
+      change = d > 0 ? `, up ${n(d)} since yesterday` : d < 0 ? `, down ${n(-d)} since yesterday` : ', same as yesterday';
+    }
+    lines.push(`${icon} *${c.name}:* ${n(missing)} missing (${pct.toFixed(2)}%)${change}`);
+    const extra = [];
+    if (missing) {
+      const old = daysSince(oldestDay([].concat((c.x && c.x.rows) || [], (c.y && c.y.rows) || []), c.col), today);
+      if (old !== null) extra.push(`oldest ${old} day${old === 1 ? '' : 's'}`);
+      if (c.reasons) { const t = topReason(c.x, c.y); if (t) extra.push(`top reason: ${t}`); }
+    }
+    if (c.onTheWay) { const w = ((c.x && c.x.sameDay) || 0) + ((c.y && c.y.sameDay) || 0); if (w) extra.push(`${n(w)} shipped today, on the way`); }
+    if (extra.length) lines.push(`      ${extra.join(' \u00B7 ')}`);
+  }
+  const wh = r.warehouseDay, aged = r.agedOpen;
+  if ((wh && wh.orderDay) || aged) {
+    lines.push('');
+    if (wh && wh.orderDay) lines.push(`\uD83D\uDCE6 Warehouse is shipping orders placed ${fmtDay(wh.orderDay)}`);
+    if (aged) {
+      const so = aged.rows || [], to = aged.transfer || [];
+      const soOld = so.length ? daysSince(so[0][1], today) : null, toOld = to.length ? daysSince(to[0][1], today) : null;
+      lines.push(`\u23F3 Waiting in Avectous: ${n(so.length)} sales orders${soOld !== null ? ` (oldest ${soOld} days)` : ''}, ${n(to.length)} transfer orders${toOld !== null ? ` (oldest ${toOld} days)` : ''}`);
+    }
+  }
+  return { lines, counts };
+}
+
+export async function checkDaily(store, results, nowMs, note) {
+  if (!alertsConfigured()) return;
+  const t = pacific(nowMs);
+  if (t.min < DAILY_AT_MIN) return;
+  const st = (await store.get('alerts:state', { type: 'json' })) || { cards: {} };
+  if (st.dailySent === t.day) return;
+  const saved = await results.get('integrations', { type: 'json' });
+  if (!saved || !saved.result) return;
+  const { lines, counts } = dailySummary(saved, st.dailyPrev, t.day);
+  st.dailySent = t.day;           // mark first, so a send problem can't cause a repeat every minute
+  st.dailyPrev = counts;
+  await store.setJSON('alerts:state', st);
+  try { await sendAlert(`Daily integrations summary, ${fmtDay(t.day)}`, lines); note('Daily summary sent'); }
+  catch (err) { note(`Daily summary failed to send: ${err.message}`); }
+}

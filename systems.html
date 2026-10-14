@@ -34,7 +34,7 @@
   .sd-status{ display:inline-flex; align-items:center; gap:7px; align-self:flex-start; font-size:12.5px; font-weight:700; border-radius:20px; padding:4px 11px 4px 8px; }
   .sd-status .emo{ font-size:15px; line-height:1; }
   .sd-status.ok{ background:#e3f5ec; color:#156b44; }
-  .sd-status.warn{ background:#fdf0dc; color:#94570a; }
+  .sd-status.warn{ background:#e6effc; color:#1f4f99; }
   .sd-status.bad{ background:#fde4e4; color:#a32020; }
   .sd-status.wait{ background:#eef1f5; color:#6b7684; }
   .sd-card h3{ margin:12px 0 14px; font-size:18px; font-weight:800; color:var(--navy); display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
@@ -185,10 +185,10 @@ const CLOCK = SVG('<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>');
 const CAL = SVG('<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>');
 const named = (from, to) => `<span class="sysi">${SYS[from]}${from}</span> &rarr; <span class="sysi">${SYS[to]}${to}</span>`;
 
-// Status: 0 missing = all caught up, 1-99 = needs attention, 100+ = problem.
+// Status: 0 missing = all caught up, some missing but 99%+ made it across = orders to check, under 99% = problem (and a Slack alert).
 const STATUS = {
   ok:   ['\u2705', 'All caught up'],
-  warn: ['\u26A0\uFE0F', 'Needs attention'],
+  warn: ['\uD83D\uDD0D', 'Orders to check'],
   bad:  ['\uD83D\uDEA8', 'Problem'],
   wait: ['\u23F3', 'Waiting on Shopify access']
 };
@@ -227,7 +227,8 @@ function queueCard({ from, to, so, toq, leftLabel, rightLabel, exportId, reasons
   const matched = sum(so, toq, 'matched');
   const missing = sum(so, toq, 'missing');
   const pct = total ? ((total - missing) / total) * 100 : null;
-  const tone = !missing ? 'ok' : missing < 100 ? 'warn' : 'bad';
+  // Same line as the Slack alert: under 99% made it across is a problem.
+  const tone = !missing ? 'ok' : (pct !== null && pct >= 99) ? 'warn' : 'bad';
   const pctTone = pct === null ? 'warn' : pct >= 99 ? '' : pct >= 97 ? 'warn' : 'bad';
 
   let delta = '';
