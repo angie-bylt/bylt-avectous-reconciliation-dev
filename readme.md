@@ -649,3 +649,7 @@ Dependency: nodemailer 6.9.14 (package.json).
 - Oct 14: daily summary no longer lists aging in Avectous. Shopify flow alert
   text: "🚨 No Shopify orders have reached NetSuite in X." / "Last one: ..." /
   "Check Celigo's Shopify → NetSuite order flow."
+- Oct 14: Avectous shipments step adapts to slow days: on a timeout it asks for
+  smaller pages (1,000 -> 500 -> 250 -> 125 rows), keeping its place, and goes back
+  to 1,000 for the next order date. Before this, a heavy day (e.g. Oct 11) could
+  time out 6 times in a row and stop the refresh.

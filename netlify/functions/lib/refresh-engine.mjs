@@ -375,14 +375,30 @@ async function stepShp(ctx, step, cur) {
     return true;
   }
   const day = cur.days[cur.d];
-  const page = await clients.avPage({ report: 'shipments', pageIndex: cur.page, pageLimit: 1000, parameters: { OrderDate: `${day} 00:00:00` }, timeoutMs: ctx.timeLeft() - 1500 });
+  // Slow days (big order days) can take Avectous longer than one run allows at
+  // 1,000 rows a page. On a timeout, ask for smaller pages (1,000 -> 500 -> 250
+  // -> 125), keeping our place, like the manual pull button does.
+  cur.limit ??= 1000;
+  let page;
+  try {
+    page = await clients.avPage({ report: 'shipments', pageIndex: cur.page, pageLimit: cur.limit, parameters: { OrderDate: `${day} 00:00:00` }, timeoutMs: ctx.timeLeft() - 1500 });
+  } catch (err) {
+    if (/timeout|timed out|abort/i.test(err.message) && cur.limit > 125) {
+      const done = (cur.page - 1) * cur.limit;      // rows of this day already saved
+      cur.limit = cur.limit / 2;
+      cur.page = done / cur.limit + 1;
+      ctx.note(`Avectous shipments: order date ${day} was slow, now asking for ${cur.limit} rows at a time`);
+      return false;
+    }
+    throw err;
+  }
   if (page.rows.length) {
     await addWork(store, 'shp', cur.pages, SHP_KEEP, toArrays(page.rows.map(r => pick(r, SHP_KEEP)), SHP_KEEP));
     cur.pages++;
   }
   ctx.progress = `Avectous shipments: order date ${day} (${cur.d + 1} of ${cur.days.length})`;
   if (page.hasMore && page.rows.length) { cur.page++; return false; }
-  cur.d++; cur.page = 1;
+  cur.d++; cur.page = 1; cur.limit = 1000;
   if (cur.d >= cur.days.length) cur.finished = true;
   return false;
 }
