@@ -592,3 +592,10 @@ this passes.
   Shopify cards; Endless Aisle (pos with shipping) is checked like web orders.
   A Shopify failure is retried 3 times, then skipped for that hour without
   holding up the rest; the previous Shopify data stays in use.
+- Oct 13 fix: the first full Shopify export (~180k orders, ~30 MB) was too big to
+  download and read inside one ~30-second run; Netlify cut every run off before it
+  could save, so the refresh sat on "preparing the export". The export file is now
+  read in ~4 MB pieces (HTTP Range), each piece saved as a work page, then merged.
+  Safety net for every step: a run cut off by the time limit leaves its lock set;
+  after 3 cut-offs in a row the Shopify step is skipped for the hour, and any other
+  step stops the refresh with a note, instead of hanging silently.

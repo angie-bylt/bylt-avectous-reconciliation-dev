@@ -511,6 +511,7 @@ async function stepReasons(ctx, step, cur) {
 // then only orders changed since the last refresh. A Shopify problem never
 // holds up the rest of the refresh: after 3 failed tries it's skipped this hour.
 const SHOPIFY_FROM = '2026-08-06';
+const SHOPIFY_PIECE_BYTES = 4 * 1024 * 1024;   // ~4 MB of the export file per request
 function shopStatus(n) {
   if (n.cancelledAt) return 'cancelled';
   switch (n.displayFulfillmentStatus) {
@@ -551,8 +552,31 @@ async function stepShopify(ctx, step, cur) {
       return 'wait';
     }
     if (b.status !== 'COMPLETED') throw new Error(`export ${String(b.status).toLowerCase()}${b.errorCode ? ` (${b.errorCode})` : ''}`);
-    const nodes = await clients.shopifyBulkDownload(b.url);
-    const rows = nodes.filter(n => n && n.name).map(n => shopRow(n, cur.tz));
+
+    // Read the export file a piece at a time (each piece saved), then merge.
+    if (!cur.read) {
+      cur.offset ??= 0; cur.pages ??= 0; cur.carry ??= ''; cur.count ??= 0;
+      if (!b.url) { cur.read = true; }
+      else {
+        const piece = await clients.shopifyBulkPiece(b.url, cur.offset, SHOPIFY_PIECE_BYTES);
+        const text = cur.carry + piece.text;
+        cur.offset += Buffer.byteLength(piece.text);
+        const end = cur.offset >= piece.total || !piece.text;
+        const lines = text.split('\n');
+        cur.carry = end ? '' : lines.pop();          // a line cut in half waits for the next piece
+        const rows = [];
+        for (const line of lines) { if (!line.trim()) continue; const n = JSON.parse(line); if (n && n.name) rows.push(shopRow(n, cur.tz)); }
+        if (rows.length) { await addWork(store, 'shopify', cur.pages, ['r'], rows); cur.pages++; cur.count += rows.length; }
+        ctx.progress = `Shopify orders: reading the export (${cur.count.toLocaleString()} orders, ${Math.min(100, Math.round(cur.offset / Math.max(1, piece.total) * 100))}%)`;
+        if (end) cur.read = true;
+        return false;
+      }
+    }
+    const rows = [];
+    for (let i = 0; i < cur.pages; i++) {
+      const pg = await store.get(`work:shopify:${i}`, { type: 'json' });
+      if (pg) for (const r of pg.rows) rows.push(r);
+    }
 
     const prev = step.incremental ? await store.get('shopify:orders', { type: 'json' }).catch(() => null) : null;
     const byName = new Map((prev && prev.rows || []).map(r => [r[0], r]));
@@ -562,13 +586,15 @@ async function stepShopify(ctx, step, cur) {
     let from = null, through = null;
     for (const r of all) { if (!through || r[1] > through) through = r[1]; if (!from || r[1] < from) from = r[1]; }
     await store.setJSON('shopify:orders', { source: 'api', uploadedAt: new Date().toISOString(), from, through, files: [], rows: all });
+    await clearWork(store, 'shopify', cur.pages);
     ctx.note(step.incremental
       ? `Shopify orders: ${rows.length.toLocaleString()} changed orders merged (${before.toLocaleString()} -> ${all.length.toLocaleString()})`
       : `Shopify orders: ${all.length.toLocaleString()} orders since go-live`);
     return true;
   } catch (err) {
     cur.fails = (cur.fails || 0) + 1;
-    cur.bulkId = null;
+    if (cur.pages) await clearWork(store, 'shopify', cur.pages).catch(() => {});
+    Object.assign(cur, { bulkId: null, read: false, offset: 0, pages: 0, carry: '', count: 0 });
     if (cur.fails >= 3) { ctx.note(`Shopify: skipped this hour after 3 tries (${err.message}); the last Shopify data stays in use`); return true; }
     ctx.progress = `Shopify orders: retrying (${err.message})`;
     return 'wait';
@@ -576,13 +602,17 @@ async function stepShopify(ctx, step, cur) {
 }
 
 const STEP_FN = { ns: stepNs, avo: stepAvo, shp: stepShp, shopify: stepShopify, resolve: stepResolve, compute: stepCompute, reasons: stepReasons };
-const STEP_EST = { ns: EST.ns, avo: EST.av, shp: EST.av, shopify: 20000, resolve: EST.av, compute: EST.compute, reasons: EST.av };
+const STEP_EST = { ns: EST.ns, avo: EST.av, shp: EST.av, shopify: 9000, resolve: EST.av, compute: EST.compute, reasons: EST.av };
 
 // ---------- one run ----------
 export async function runTick({ store, results, clients, compute, now = () => Date.now() }) {
   const t0 = now();
   const st = await getState(store);
   if (st.lockUntil && st.lockUntil > t0) return { skipped: 'locked' };
+  // The lock is cleared at the end of every run, so a lock still set here means
+  // the last run was cut off by the time limit before it could save.
+  const cutOff = !!st.lockUntil && st.status === 'running';
+  st.cutoffs = cutOff ? (st.cutoffs || 0) + 1 : 0;
   st.lockUntil = t0 + 40000;
   await putState(store, st);
 
@@ -605,6 +635,20 @@ export async function runTick({ store, results, clients, compute, now = () => Da
       st.lastSlot = hourSlot(t0);
       Object.assign(st, { status: 'running', steps: c.steps, mode: c.mode, step: 0, cursor: {}, cycleStartedAt: new Date(t0).toISOString(), requested: null, errors: 0, lastError: null, leftOpen: [] });
       ctx.note(`Started a${c.mode === "incremental" ? "n" : ""} ${c.mode} refresh`);
+    }
+
+    if (st.status === 'running' && st.cutoffs >= 3) {
+      const step = st.steps[st.step];
+      st.cutoffs = 0;
+      if (step.kind === 'shopify') {
+        ctx.note('Shopify: the export took too long to read 3 times in a row; skipped this hour, the last Shopify data stays in use');
+        await clearWork(store, 'shopify', (st.cursor && st.cursor.pages) || 0).catch(() => {});
+        st.step++; st.cursor = {};
+      } else {
+        ctx.note(`Refresh stopped: the ${step.kind} step ran out of time 3 times in a row`);
+        st.status = 'idle'; st.lastCycle = { ok: false, endedAt: new Date(now()).toISOString(), error: `${step.kind} ran out of time` };
+        st.failedAt = new Date(now()).toISOString();
+      }
     }
 
     while (st.status === 'running') {

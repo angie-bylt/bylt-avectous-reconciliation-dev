@@ -189,6 +189,18 @@ export async function shopifyBulkStatus(store, id) {
   return r.data.node;   // { status: CREATED|RUNNING|COMPLETED|FAILED|CANCELED|EXPIRED, url, objectCount, errorCode }
 }
 
+// One piece of the export file (byte range), so a big file is read over several
+// runs instead of all at once. Returns the text and the file's total size.
+export async function shopifyBulkPiece(url, start, size) {
+  const res = await fetch(url, { headers: { Range: `bytes=${start}-${start + size - 1}` } });
+  if (res.status === 416) return { text: '', total: start };            // past the end
+  if (!res.ok) throw new Error(`Shopify export download ${res.status}`);
+  const text = await res.text();
+  if (res.status === 200) return { text, total: start + Buffer.byteLength(text) };   // server sent it all
+  const m = /\/(\d+)\s*$/.exec(res.headers.get('content-range') || '');
+  return { text, total: m ? Number(m[1]) : start + Buffer.byteLength(text) };
+}
+
 export async function shopifyBulkDownload(url) {
   if (!url) return [];
   const res = await fetch(url);
