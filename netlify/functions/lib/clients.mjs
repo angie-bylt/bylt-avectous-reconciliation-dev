@@ -150,3 +150,51 @@ export async function shopifyGraphQL(store, query, variables) {
   if (!res.ok || !data) throw new Error(`Shopify API ${res.status}: ${text.slice(0, 200)}`);
   return data;   // { data, errors, extensions }
 }
+
+export const shopifyConfigured = () => !!(process.env.SHOPIFY_STORE && process.env.SHOPIFY_CLIENT_ID && process.env.SHOPIFY_CLIENT_SECRET);
+
+export async function shopifyTimezone(store) {
+  const r = await shopifyGraphQL(store, '{ shop { ianaTimezone } }');
+  return (r.data && r.data.shop && r.data.shop.ianaTimezone) || 'America/Los_Angeles';
+}
+
+// Bulk export: Shopify builds the whole list in the background and returns one
+// file (JSON lines), so a large pull doesn't hit the per-minute request limits.
+// Only the fields the dashboard needs. shippingLine is empty for in-store sales.
+const ORDER_FIELDS = 'name createdAt cancelledAt displayFulfillmentStatus sourceName shippingLine { title }';
+
+export async function shopifyBulkStart(store, search) {
+  const inner = `{ orders(query: ${JSON.stringify(search)}) { edges { node { ${ORDER_FIELDS} } } } }`;
+  const m = `mutation($q: String!) { bulkOperationRunQuery(query: $q) { bulkOperation { id status } userErrors { field message } } }`;
+  const r = await shopifyGraphQL(store, m, { q: inner });
+  const out = r.data && r.data.bulkOperationRunQuery;
+  const errs = (r.errors || []).map(e => e.message).concat((out && out.userErrors || []).map(e => e.message));
+  if (errs.length) {
+    // Only one bulk export at a time: if an old one is stuck, cancel it so the next try starts clean.
+    if (errs.some(m => /already in progress/i.test(m))) {
+      const c = await shopifyGraphQL(store, '{ currentBulkOperation(type: QUERY) { id status } }');
+      const op = c.data && c.data.currentBulkOperation;
+      if (op && (op.status === 'RUNNING' || op.status === 'CREATED')) {
+        await shopifyGraphQL(store, 'mutation($id: ID!) { bulkOperationCancel(id: $id) { userErrors { message } } }', { id: op.id });
+      }
+    }
+    throw new Error(`Shopify bulk export: ${errs.join('; ')}`);
+  }
+  return out.bulkOperation.id;
+}
+
+export async function shopifyBulkStatus(store, id) {
+  const r = await shopifyGraphQL(store, `query($id: ID!) { node(id: $id) { ... on BulkOperation { status errorCode objectCount url } } }`, { id });
+  if (r.errors && r.errors.length) throw new Error(`Shopify bulk status: ${r.errors.map(e => e.message).join('; ')}`);
+  return r.data.node;   // { status: CREATED|RUNNING|COMPLETED|FAILED|CANCELED|EXPIRED, url, objectCount, errorCode }
+}
+
+export async function shopifyBulkDownload(url) {
+  if (!url) return [];
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Shopify bulk file download ${res.status}`);
+  const text = await res.text();
+  const out = [];
+  for (const line of text.split('\n')) { if (line.trim()) out.push(JSON.parse(line)); }
+  return out;
+}

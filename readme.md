@@ -580,3 +580,15 @@ Systems > "Test Shopify connection" (/api/shopify-test) runs Jordan's steps 1-4
 (token, the four scopes, a first call, one query per scope) and shows pass/fail.
 It never shows the token or the secret. Pulling orders hourly comes next, once
 this passes.
+- Oct 13: hourly Shopify pull (step "shopify", after the Avectous steps). Uses
+  Shopify's bulk export (bulkOperationRunQuery -> poll -> download JSON lines),
+  so a big pull doesn't hit request limits. First pull: every order created
+  since 2026-08-06; then only orders updated since the day before the last
+  successful refresh, merged by order name. Saved as shopify:orders with
+  source "api" (uploads are refused from then on). Per order: name, day placed
+  (store time zone), status (cancelled if cancelledAt, else fulfilled / partial
+  / restocked / unfulfilled), and "instore" when sourceName is pos with no
+  shipping line. In-store sales and cancelled orders are left out of both
+  Shopify cards; Endless Aisle (pos with shipping) is checked like web orders.
+  A Shopify failure is retried 3 times, then skipped for that hour without
+  holding up the rest; the previous Shopify data stays in use.

@@ -154,6 +154,7 @@ function buildCycle(st, now, haveSnapshots, forceFull) {
   const full = forceFull || !haveSnapshots || !st.lastFullAt ||
     (now - Date.parse(st.lastFullAt)) > FULL_EVERY_DAYS * 864e5;
   const since = st.lastSuccessAt ? nsDate(addDays(dayOf(Date.parse(st.cycleOfLastSuccess || st.lastSuccessAt)), -1)) : null;
+  const shopSince = st.lastSuccessAt ? addDays(dayOf(Date.parse(st.cycleOfLastSuccess || st.lastSuccessAt)), -1) : null;
   return {
     mode: full ? 'full' : 'incremental',
     steps: [
@@ -162,6 +163,7 @@ function buildCycle(st, now, haveSnapshots, forceFull) {
       { kind: 'ns', source: 'shop', incremental: !full && !!since, since },
       { kind: 'avo', incremental: !full },
       { kind: 'shp', incremental: !full },
+      { kind: 'shopify', incremental: !full && !!shopSince, since: shopSince },
       { kind: 'resolve', incremental: !full },
       { kind: 'compute' },
       { kind: 'reasons' }
@@ -502,8 +504,79 @@ async function stepReasons(ctx, step, cur) {
   return true;
 }
 
-const STEP_FN = { ns: stepNs, avo: stepAvo, shp: stepShp, resolve: stepResolve, compute: stepCompute, reasons: stepReasons };
-const STEP_EST = { ns: EST.ns, avo: EST.av, shp: EST.av, resolve: EST.av, compute: EST.compute, reasons: EST.av };
+// ---------- Shopify (read-only API, bulk export) ----------
+// Pulls Shopify orders placed since go-live: the order number, the day it was
+// placed (store time), fulfillment status, cancelled, and whether it was an
+// in-store sale (Point of Sale with no shipping). Full pull the first time,
+// then only orders changed since the last refresh. A Shopify problem never
+// holds up the rest of the refresh: after 3 failed tries it's skipped this hour.
+const SHOPIFY_FROM = '2026-08-06';
+function shopStatus(n) {
+  if (n.cancelledAt) return 'cancelled';
+  switch (n.displayFulfillmentStatus) {
+    case 'FULFILLED': return 'fulfilled';
+    case 'PARTIALLY_FULFILLED': return 'partial';
+    case 'RESTOCKED': return 'restocked';
+    default: return 'unfulfilled';
+  }
+}
+function shopRow(n, tz) {
+  const day = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(n.createdAt));
+  const inStore = n.sourceName === 'pos' && !(n.shippingLine && n.shippingLine.title);
+  return [n.name, day, shopStatus(n), inStore ? 'instore' : ''];
+}
+
+async function stepShopify(ctx, step, cur) {
+  const { store, clients } = ctx;
+  if (!clients.shopifyConfigured || !clients.shopifyConfigured()) {
+    ctx.note('Shopify: not connected yet (no SHOPIFY_ variables), skipped');
+    return true;
+  }
+  try {
+    if (step.incremental && !cur.checked) {
+      const prev = await store.get('shopify:orders', { type: 'json' }).catch(() => null);
+      cur.checked = true;
+      if (!prev || prev.source !== 'api') { step.incremental = false; ctx.note('Shopify: first pull from the API, getting every order since go-live'); }
+    }
+    if (!cur.tz) cur.tz = await clients.shopifyTimezone(store);
+    if (!cur.bulkId) {
+      const search = step.incremental ? `created_at:>=${SHOPIFY_FROM} AND updated_at:>=${step.since}` : `created_at:>=${SHOPIFY_FROM}`;
+      cur.bulkId = await clients.shopifyBulkStart(store, search);
+      ctx.progress = 'Shopify orders: export started';
+      return 'wait';
+    }
+    const b = await clients.shopifyBulkStatus(store, cur.bulkId);
+    if (b.status === 'CREATED' || b.status === 'RUNNING') {
+      ctx.progress = `Shopify orders: Shopify is preparing the export (${Number(b.objectCount || 0).toLocaleString()} so far)`;
+      return 'wait';
+    }
+    if (b.status !== 'COMPLETED') throw new Error(`export ${String(b.status).toLowerCase()}${b.errorCode ? ` (${b.errorCode})` : ''}`);
+    const nodes = await clients.shopifyBulkDownload(b.url);
+    const rows = nodes.filter(n => n && n.name).map(n => shopRow(n, cur.tz));
+
+    const prev = step.incremental ? await store.get('shopify:orders', { type: 'json' }).catch(() => null) : null;
+    const byName = new Map((prev && prev.rows || []).map(r => [r[0], r]));
+    const before = byName.size;
+    for (const r of rows) byName.set(r[0], r);
+    const all = [...byName.values()];
+    let from = null, through = null;
+    for (const r of all) { if (!through || r[1] > through) through = r[1]; if (!from || r[1] < from) from = r[1]; }
+    await store.setJSON('shopify:orders', { source: 'api', uploadedAt: new Date().toISOString(), from, through, files: [], rows: all });
+    ctx.note(step.incremental
+      ? `Shopify orders: ${rows.length.toLocaleString()} changed orders merged (${before.toLocaleString()} -> ${all.length.toLocaleString()})`
+      : `Shopify orders: ${all.length.toLocaleString()} orders since go-live`);
+    return true;
+  } catch (err) {
+    cur.fails = (cur.fails || 0) + 1;
+    cur.bulkId = null;
+    if (cur.fails >= 3) { ctx.note(`Shopify: skipped this hour after 3 tries (${err.message}); the last Shopify data stays in use`); return true; }
+    ctx.progress = `Shopify orders: retrying (${err.message})`;
+    return 'wait';
+  }
+}
+
+const STEP_FN = { ns: stepNs, avo: stepAvo, shp: stepShp, shopify: stepShopify, resolve: stepResolve, compute: stepCompute, reasons: stepReasons };
+const STEP_EST = { ns: EST.ns, avo: EST.av, shp: EST.av, shopify: 20000, resolve: EST.av, compute: EST.compute, reasons: EST.av };
 
 // ---------- one run ----------
 export async function runTick({ store, results, clients, compute, now = () => Date.now() }) {
@@ -554,6 +627,7 @@ export async function runTick({ store, results, clients, compute, now = () => Da
         }
         break;  // try again next minute
       }
+      if (done === 'wait') break;   // waiting on something outside (e.g. Shopify preparing an export): check again next minute
       if (done) {
         st.step++; st.cursor = {};
         if (st.step >= st.steps.length) {

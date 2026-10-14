@@ -2422,6 +2422,9 @@ function computeShopifyAudit(soData, shopRows, meta, nsAllData){
   let skipped = 0, through = null;
 
   let cancelled = 0, inStoreSales = 0;
+  const shopInStore = new Set(shopRows.filter(r => r[3] === 'instore').map(r => r[0]));   // from the Shopify API
+  const nsIsInStore = isInStoreSale;
+  isInStoreSale = k => shopInStore.has(k) || nsIsInStore(k);
   for(const [name, day, status] of shopRows){
     if(!name) continue;
     shopBy.set(name, { day, status });
@@ -2449,5 +2452,5 @@ function computeShopifyAudit(soData, shopRows, meta, nsAllData){
   for(const g of [inb.online, inb.other, out.online, out.other]) g.rows.sort((a, b) => String(a[s2i(a)]).localeCompare(String(b[s2i(b)])));
   function s2i(r){ return r.length === 3 ? 1 : 2; }
 
-  return { inbound: inb, outbound: out, through, skipped, cancelled, inStoreSales, checkedAgainst, uploadedAt: meta && meta.uploadedAt || null, files: meta && meta.files || null };
+  return { inbound: inb, outbound: out, through, skipped, cancelled, inStoreSales, checkedAgainst, source: (meta && meta.source) || 'upload', uploadedAt: meta && meta.uploadedAt || null, files: meta && meta.files || null };
 }

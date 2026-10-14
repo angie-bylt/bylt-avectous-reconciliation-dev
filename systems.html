@@ -294,7 +294,10 @@ function render(){
   const prev = current.prevMissing || {};
   const w = current.warehouseDay;
   const sh = current.shopify && !current.shopify.error ? current.shopify : null;
-  const shopSrc = sh ? `<div class="shop-src"><span>From Shopify exports, orders through ${fmtDay(sh.through)}.${sh.inStoreSales ? ` ${fmt(sh.inStoreSales)} in-store sales left out.` : ''}</span><button type="button" data-upload>Add Shopify export</button><button type="button" data-upload="replace" title="Clears the saved Shopify orders and keeps only this upload">Replace all</button><span data-upstatus></span></div>` : '';
+  const inStoreNote = sh && sh.inStoreSales ? ` ${fmt(sh.inStoreSales)} in-store sales left out.` : '';
+  const shopSrc = !sh ? '' : sh.source === 'api'
+    ? `<div class="shop-src"><span>Live from Shopify, updated every hour.${inStoreNote}</span></div>`
+    : `<div class="shop-src"><span>From Shopify exports, orders through ${fmtDay(sh.through)}.${inStoreNote}</span><button type="button" data-upload>Add Shopify export</button><button type="button" data-upload="replace" title="Clears the saved Shopify orders and keeps only this upload">Replace all</button><span data-upstatus></span></div>`;
   inc.innerHTML =
     (sh ? queueCard({ from: 'Shopify', to: 'NetSuite', so: sh.inbound.online, toq: sh.inbound.other,
         leftLabel: 'Shopify orders 810 ships', rightLabel: 'Orders in NetSuite', exportId: 'shopIn',
