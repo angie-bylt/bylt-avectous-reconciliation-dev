@@ -14,6 +14,7 @@
 
 export const ALERT_LINE = 99;
 const REMIND_MS = 24 * 3600 * 1000;
+const SHOPIFY_GAP_MIN = 120;   // no new Shopify orders in NetSuite for 2 hours = alert
 
 const slackHook = () => (process.env.ALERT_SLACK_WEBHOOK || '').trim();
 const emailOn = () => !!(process.env.ALERT_SMTP_USER && process.env.ALERT_SMTP_PASS && process.env.ALERT_TO);
@@ -62,7 +63,7 @@ export function cardHealth(result) {
 const pctText = c => `${c.name}: ${c.pct.toFixed(2)}% made it across (${c.missing.toLocaleString()} missing of ${c.total.toLocaleString()})`;
 
 // After each saved refresh: compare cards with the line and send what changed.
-export async function checkCards(store, result, note) {
+export async function checkCards(store, result, note, savedAt) {
   if (!alertsConfigured()) return;
   const st = (await store.get('alerts:state', { type: 'json' })) || { cards: {} };
   const nowMs = Date.now();
@@ -81,6 +82,23 @@ export async function checkCards(store, result, note) {
     [`Still under ${ALERT_LINE}% (daily reminder):`, '', ...remind.map(pctText)]]);
   if (recovered.length) sends.push([`Back to normal: ${recovered.map(c => c.name).join(', ')}`,
     [`Back at ${ALERT_LINE}% or above:`, '', ...recovered.map(pctText)]]);
+  // Same-day check: are Shopify orders still reaching NetSuite? The cards only
+  // count orders from before today, so a breakdown today would otherwise wait
+  // until tomorrow. Orders come in around the clock, so a 2-hour gap means stuck.
+  const sh = result && result.shopify && !result.shopify.error ? result.shopify : null;
+  if (sh && sh.lastInNetSuite && savedAt) {
+    const gapMin = Math.round((Date.parse(savedAt) - Date.parse(sh.lastInNetSuite)) / 60000);
+    const last = `${sh.lastInNetSuiteName || 'the last one'} at ${new Date(sh.lastInNetSuite).toLocaleString('en-US', { timeZone: 'America/Los_Angeles', weekday: 'short', hour: 'numeric', minute: '2-digit' })}`;
+    const gapText = gapMin >= 120 ? `${Math.floor(gapMin / 60)} hr ${gapMin % 60} min` : `${gapMin} min`;
+    if (gapMin > SHOPIFY_GAP_MIN && !st.shopifyFlowDown) {
+      st.shopifyFlowDown = nowMs;
+      sends.push([`\uD83D\uDEA8 No Shopify orders have reached NetSuite in ${gapText}.`,
+        [`Last one: ${last}.`, "Check Celigo\u2019s Shopify \u2192 NetSuite order flow."]]);
+    } else if (gapMin <= SHOPIFY_GAP_MIN && st.shopifyFlowDown) {
+      st.shopifyFlowDown = null;
+      sends.push(['\u2705 Shopify orders are reaching NetSuite again.', [`Latest: ${last}.`]]);
+    }
+  }
   for (const [subject, lines] of sends) {
     try { await sendAlert(subject, lines); note(`Alert sent: ${subject}`); }
     catch (err) { note(`Alert failed to send: ${err.message}`); }
@@ -168,18 +186,14 @@ export function dailySummary(saved, prev, today) {
       if (old !== null) extra.push(`oldest ${old} day${old === 1 ? '' : 's'}`);
       if (c.reasons) { const t = topReason(c.x, c.y); if (t) extra.push(`top reason: ${t}`); }
     }
+    if (c.name === 'Shopify \u2192 NetSuite' && sh && sh.lastInNetSuite) extra.push(`latest one in NetSuite ${new Date(sh.lastInNetSuite).toLocaleTimeString('en-US', { timeZone: 'America/Los_Angeles', hour: 'numeric', minute: '2-digit' })}`);
     if (c.onTheWay) { const w = ((c.x && c.x.sameDay) || 0) + ((c.y && c.y.sameDay) || 0); if (w) extra.push(`${n(w)} shipped today, on the way`); }
     if (extra.length) lines.push(`      ${extra.join(' \u00B7 ')}`);
   }
   const wh = r.warehouseDay, aged = r.agedOpen;
-  if ((wh && wh.orderDay) || aged) {
+  if (wh && wh.orderDay) {
     lines.push('');
     if (wh && wh.orderDay) lines.push(`\uD83D\uDCE6 Warehouse is shipping orders placed ${fmtDay(wh.orderDay)}`);
-    if (aged) {
-      const so = aged.rows || [], to = aged.transfer || [];
-      const soOld = so.length ? daysSince(so[0][1], today) : null, toOld = to.length ? daysSince(to[0][1], today) : null;
-      lines.push(`\u23F3 Waiting in Avectous: ${n(so.length)} sales orders${soOld !== null ? ` (oldest ${soOld} days)` : ''}, ${n(to.length)} transfer orders${toOld !== null ? ` (oldest ${toOld} days)` : ''}`);
-    }
   }
   return { lines, counts };
 }

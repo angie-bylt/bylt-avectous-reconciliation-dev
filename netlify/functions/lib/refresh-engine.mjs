@@ -530,7 +530,7 @@ async function stepReasons(ctx, step, cur) {
   if (prev && prev.result) compute.attachPrev(parked.result, prev.result, prev.savedAt);
   await results.setJSON(parked.id, { result: parked.result, savedAt: new Date().toISOString(), ranBy: 'Auto-refresh' });
   await store.delete('work:integrations').catch(() => {});
-  if (ctx.alerts) { try { await ctx.alerts.checkCards(store, parked.result, n => ctx.note(n)); } catch (err) { ctx.note(`Alert check failed: ${err.message}`); } }
+  if (ctx.alerts) { try { await ctx.alerts.checkCards(store, parked.result, n => ctx.note(n), new Date().toISOString()); } catch (err) { ctx.note(`Alert check failed: ${err.message}`); } }
   ctx.note(`Integrations Status updated (${cur.todo.length} missing orders and ${cur.fTodo.length} missing shipments checked with Avectous)`);
   return true;
 }

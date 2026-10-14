@@ -642,3 +642,10 @@ Dependency: nodemailer 6.9.14 (package.json).
   minute from the scheduled run, sent once per day): each card's missing and %,
   change since the previous morning, oldest missing, top reason, shipped-today
   count, warehouse order date, and aging in Avectous (SO and TO).
+- Oct 14: same-day Shopify flow alert. After each saved refresh, if the newest
+  Shopify order NetSuite has created is more than 2 hours older than the refresh,
+  Slack gets "No Shopify orders reaching NetSuite in X" (once), then "reaching
+  NetSuite again" when it recovers. The 7:30 summary shows the latest one's time.
+- Oct 14: daily summary no longer lists aging in Avectous. Shopify flow alert
+  text: "🚨 No Shopify orders have reached NetSuite in X." / "Last one: ..." /
+  "Check Celigo's Shopify → NetSuite order flow."
