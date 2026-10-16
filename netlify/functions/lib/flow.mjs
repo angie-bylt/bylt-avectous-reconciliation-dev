@@ -7,6 +7,7 @@
 //     orders Pending Fulfillment, no WMS Export Date, not withheld, created in the
 //     last 2 days. Avectous picks up orders every 30 minutes, so orders from the last
 //     day still waiting after an hour are stuck. 25 or more = alert.
+//  3. Shopify orders not reaching NetSuite: customsearch_dash_latest_orders, none in 2 hours.
 //  2. Ship confirmations not reaching NetSuite. Search
 //     customsearch_dash_recent_fulfillments: item fulfillments created in the last 2
 //     days. None in 3 hours between 6 AM and 8 PM Pacific = alert (nights are quiet).
@@ -20,6 +21,7 @@ const WAIT_ALERT_COUNT = 25;    // this many stuck orders = alert
 const WAIT_WINDOW_H = 24;       // only orders created in the last day (older stragglers are on the cards)
 const IF_GAP_MIN = 180;         // no fulfillments for 3 hours...
 const IF_HOURS = [6, 20];       // ...between 6 AM and 8 PM Pacific
+const ORDER_GAP_MIN = 120;     // no Shopify orders in NetSuite for 2 hours = alert
 
 // NetSuite timestamps come back like "10/15/2026 10:10 pm", in Pacific time.
 function pacificOffsetMin(ms) {
@@ -50,7 +52,7 @@ async function allRows(clients, source) {
 }
 
 export async function runFlowCheck({ store, clients, alerts, nowMs, note }) {
-  if (!alerts || !alerts.alertsConfigured || !alerts.alertsConfigured()) return;
+  const canSend = !!(alerts && alerts.alertsConfigured && alerts.alertsConfigured());
   const st = (await store.get('flow:state', { type: 'json' })) || {};
   if (st.lastRun && nowMs - st.lastRun < EVERY_MS) return;
   st.lastRun = nowMs;
@@ -80,18 +82,32 @@ export async function runFlowCheck({ store, clients, alerts, nowMs, note }) {
       sends.push(['\u2705 Orders are reaching Avectous again.', [`${stuck.length.toLocaleString()} still waiting over an hour.`]]);
     }
     st.waitingCount = stuck.length;
+    st.waiting = { ok: true, count: stuck.length, oldestAt: stuck.length ? stuck[0].t : null, oldest: stuck.length ? (stuck[0].po || stuck[0].doc) : null };
   } catch (err) {
+    st.waiting = { ok: false };
     if (/not found|invalid|does not exist|SSS_MISSING|INVALID_SEARCH/i.test(err.message)) skip('waitingMissingNoted', 'Flow check: search customsearch_dash_orders_waiting not found yet, skipped');
     else note(`Flow check (orders to Avectous) failed: ${err.message}`);
   }
 
-  // 2. Ship confirmations not reaching NetSuite
+  // 2. Ship confirmations not reaching NetSuite. The search is sorted newest
+  // first (Date Created, descending), so the first page holds the newest one.
+  // If the first row isn't the newest on the page, the sort is off: then read the
+  // last page instead (newest at the end) rather than wrongly alerting.
   try {
-    const rows = await allRows(clients, 'recentIf');
-    let latest = null;
-    for (const r of rows) { const t = nsTimeToMs(col(r, 'datecreated')); if (t && (!latest || t > latest)) latest = t; }
+    const first = await clients.nsSearchPage({ source: 'recentIf', pageIndex: 0, pageSize: 1000, timeoutMs: 12000 });
+    const times = first.rows.map(r => nsTimeToMs(col(r, 'datecreated'))).filter(Boolean);
+    let latest = times.length ? Math.max(...times) : null;
+    const sortedNewestFirst = !times.length || times[0] === latest;
+    if (!sortedNewestFirst && first.total > 1000) {
+      const lastIdx = Math.ceil(first.total / 1000) - 1;
+      const last = await clients.nsSearchPage({ source: 'recentIf', pageIndex: lastIdx, pageSize: 1000, timeoutMs: 12000 });
+      for (const r of last.rows) { const t = nsTimeToMs(col(r, 'datecreated')); if (t && t > latest) latest = t; }
+      skip('ifSortNoted', 'Flow check: Recent Fulfillments search isn\u2019t sorted newest first; set Sort By Date Created, Descending');
+    }
     const h = pacificHour(nowMs);
     const daytime = h >= IF_HOURS[0] && h < IF_HOURS[1];
+    const newest = first.rows.find(r => nsTimeToMs(col(r, 'datecreated')) === latest);
+    st.recentIf = { ok: true, latestAt: latest, doc: newest ? col(newest, 'documentnumber') || '' : '', daytime };
     const gapMin = latest ? Math.round((nowMs - latest) / 60000) : null;
     if (daytime && gapMin !== null && gapMin > IF_GAP_MIN && !st.ifDown) {
       st.ifDown = nowMs;
@@ -102,11 +118,38 @@ export async function runFlowCheck({ store, clients, alerts, nowMs, note }) {
       sends.push(['\u2705 Ship confirmations are reaching NetSuite again.', [`Latest fulfillment created ${when(latest)}.`]]);
     }
   } catch (err) {
+    st.recentIf = { ok: false };
     if (/not found|invalid|does not exist|SSS_MISSING|INVALID_SEARCH/i.test(err.message)) skip('ifMissingNoted', 'Flow check: search customsearch_dash_recent_fulfillments not found yet, skipped');
     else note(`Flow check (ship confirmations) failed: ${err.message}`);
   }
 
+  // 3. Shopify orders reaching NetSuite. Search customsearch_dash_latest_orders:
+  // sales orders with a Shopify order number (PO starts with #), created since
+  // yesterday, newest first. Orders come in around the clock, so none for 2 hours
+  // means stuck.
+  try {
+    const first = await clients.nsSearchPage({ source: 'latestOrders', pageIndex: 0, pageSize: 100, timeoutMs: 12000 });
+    let latest = null, po = '';
+    for (const r of first.rows) { const t = nsTimeToMs(col(r, 'datecreated')); if (t && (!latest || t > latest)) { latest = t; po = col(r, 'pochecknumber') || col(r, 'documentnumber') || ''; } }
+    st.latestOrder = { ok: true, latestAt: latest, po };
+    const gapMin = latest ? Math.round((nowMs - latest) / 60000) : null;
+    if (gapMin !== null && gapMin > ORDER_GAP_MIN && !st.ordersDown) {
+      st.ordersDown = nowMs;
+      sends.push([`\uD83D\uDEA8 No Shopify orders have reached NetSuite in ${ago(gapMin)}.`,
+        [`Last one: ${po} at ${when(latest)}.`, 'Check Celigo\u2019s Shopify \u2192 NetSuite order flow.']]);
+    } else if (gapMin !== null && gapMin <= ORDER_GAP_MIN && st.ordersDown) {
+      st.ordersDown = null;
+      sends.push(['\u2705 Shopify orders are reaching NetSuite again.', [`Latest: ${po} at ${when(latest)}.`]]);
+    }
+  } catch (err) {
+    st.latestOrder = { ok: false };
+    if (/not found|invalid|does not exist|SSS_MISSING|INVALID_SEARCH/i.test(err.message)) skip('ordersMissingNoted', 'Flow check: search customsearch_dash_latest_orders not found yet, skipped');
+    else note(`Flow check (Shopify orders) failed: ${err.message}`);
+  }
+
+  st.checkedAt = nowMs;
   await store.setJSON('flow:state', st);
+  if (!canSend) return;
   for (const [subject, lines] of sends) {
     try { await alerts.sendAlert(subject, lines); note(`Alert sent: ${subject}`); }
     catch (err) { note(`Alert failed to send: ${err.message}`); }

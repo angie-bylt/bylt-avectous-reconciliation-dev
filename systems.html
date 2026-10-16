@@ -9,6 +9,28 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
   body{ background:linear-gradient(180deg,#b8c4d3 0%,#a9b7c8 100%); min-height:100vh; }
+  .now{ max-width:1360px; margin:0 auto; padding:20px 28px 0; }
+  .now:empty{ display:none; }
+  .now-bar{ display:flex; align-items:stretch; gap:12px; background:rgba(232,238,246,0.9); border:1px solid rgba(255,255,255,0.75); border-radius:16px; padding:10px; box-shadow:0 8px 24px rgba(30,50,80,0.10); }
+  .now-label{ display:flex; flex-direction:column; justify-content:center; gap:3px; padding:0 8px 0 6px; min-width:118px; }
+  .now-label b{ display:flex; align-items:center; gap:7px; font-size:14px; color:var(--navy); }
+  .now-label b svg{ width:16px; height:16px; color:#155e63; }
+  .now-label span{ font-size:11.5px; color:var(--muted); display:flex; align-items:center; gap:6px; }
+  .now-label span i{ width:7px; height:7px; border-radius:50%; background:#2fb37a; }
+  .now-label span.stale i{ background:#e0a034; }
+  .now-card{ flex:1; background:#fff; border-radius:11px; padding:9px 12px; display:flex; align-items:center; gap:10px; min-width:0; }
+  .now-dot{ width:9px; height:9px; border-radius:50%; flex:none; }
+  .now-card.ok .now-dot{ background:#2fb37a; box-shadow:0 0 0 4px #e3f5ec; }
+  .now-card.bad .now-dot{ background:#d64545; box-shadow:0 0 0 4px #fde4e4; }
+  .now-card.na .now-dot{ background:#aab4c2; box-shadow:0 0 0 4px #eef1f5; }
+  .now-card.bad{ box-shadow:inset 0 0 0 1.5px #f4b9b9; }
+  .now-txt{ min-width:0; }
+  .now-sys{ font-size:11.5px; font-weight:700; color:var(--muted); display:flex; align-items:center; gap:4px; white-space:nowrap; }
+  .now-sys svg{ width:13px; height:13px; }
+  .now-big{ font-size:15.5px; font-weight:800; line-height:1.25; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .now-card.ok .now-big{ color:#177a4c; } .now-card.bad .now-big{ color:#b42323; } .now-card.na .now-big{ color:#6b7684; }
+  .now-sub{ font-size:11.5px; color:#5a6678; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  @media (max-width:980px){ .now-bar{ flex-direction:column; } .now-label{ flex-direction:row; justify-content:space-between; } }
   .sd-main{ max-width:1360px; margin:0 auto; padding:24px 28px 40px; }
   .live{ display:inline-flex; align-items:center; gap:7px; font-size:12.5px; border-radius:20px; padding:3px 11px; margin-left:10px; font-weight:600; vertical-align:middle; }
   .live.on{ color:#156b44; background:#e3f5ec; }
@@ -136,6 +158,7 @@
 </div>
 
 <input type="file" id="shopFile" accept=".csv" multiple hidden>
+<div class="now" id="nowBar"></div>
 <main class="sd-main">
   <div class="sd-sections">
     <section class="sd-sec" aria-labelledby="inTitle">
@@ -537,12 +560,54 @@ document.getElementById('summaryBtn').addEventListener('click', async e => {
   e.target.disabled = false;
 });
 
+// ---------- "Right now": the 15-minute flow check (straight from NetSuite) ----------
+// Same lines as the Slack alerts: 25+ orders waiting over an hour for Avectous,
+// no Shopify order in NetSuite for 2 hours, no ship confirmation for 3 hours in
+// the daytime (6 AM to 8 PM Pacific; nights are normally quiet).
+const minsAgo = ms => Math.max(0, Math.round((Date.now() - ms) / 60000));
+const agoText = m => m < 60 ? `${m} min ago` : m < 1440 ? `${Math.floor(m / 60)} hr ${m % 60} min ago` : `${Math.floor(m / 1440)} days ago`;
+const at = ms => new Date(ms).toLocaleString([], { weekday:'short', hour:'numeric', minute:'2-digit' });
+const PULSE = SVG('<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>');
+function nowCard(tone, from, to, big, sub){
+  return `<div class="now-card ${tone}"><span class="now-dot" aria-hidden="true"></span><div class="now-txt">
+    <div class="now-sys">${SYS[from]}${from} &rarr; ${SYS[to]}${to}</div>
+    <div class="now-big">${big}</div><div class="now-sub">${sub}</div></div></div>`;
+}
+function renderNow(f){
+  const el = document.getElementById('nowBar');
+  if(!f || !f.checkedAt){ el.innerHTML = ''; return; }
+  const checked = minsAgo(f.checkedAt);
+  const notSet = (from, to, name) => nowCard('na', from, to, 'Not set up yet', `Needs the saved search \u201c${name}\u201d`);
+  // Shopify -> NetSuite
+  const o = f.latestOrder;
+  let c1 = notSet('Shopify', 'NetSuite', 'Dashboard - Latest Orders');
+  if(o && o.ok && o.latestAt){ const m = minsAgo(o.latestAt); c1 = nowCard(m > 120 ? 'bad' : 'ok', 'Shopify', 'NetSuite', `Last order ${agoText(m)}`, `${escapeHtml(o.po || '')} at ${at(o.latestAt)}`); }
+  // NetSuite -> Avectous
+  const w = f.waiting;
+  let c2 = notSet('NetSuite', 'Avectous', 'Dashboard - Orders Waiting for Avectous');
+  if(w && w.ok) c2 = w.count >= 25
+    ? nowCard('bad', 'NetSuite', 'Avectous', `${fmt(w.count)} waiting over an hour`, `Oldest ${w.oldestAt ? at(w.oldestAt) : ''} \u00b7 normally under 25`)
+    : nowCard('ok', 'NetSuite', 'Avectous', 'Orders flowing', w.count ? `${fmt(w.count)} waiting over an hour \u00b7 normally under 25` : 'Nothing waiting over an hour');
+  // Avectous -> NetSuite
+  const r = f.recentIf;
+  let c3 = notSet('Avectous', 'NetSuite', 'Dashboard - Recent Fulfillments');
+  if(r && r.ok && r.latestAt){
+    const m = minsAgo(r.latestAt);
+    c3 = m > 180 && !r.daytime ? nowCard('ok', 'Avectous', 'NetSuite', 'Quiet overnight', `Normal. Last confirmation ${at(r.latestAt)}`)
+       : nowCard(m > 180 ? 'bad' : 'ok', 'Avectous', 'NetSuite', `Last confirmation ${agoText(m)}`, `${escapeHtml(r.doc || '')} at ${at(r.latestAt)}`);
+  }
+  el.innerHTML = `<div class="now-bar">
+    <div class="now-label"><b>${PULSE}Right now</b><span class="${checked > 30 ? 'stale' : ''}"><i></i>Checked ${agoText(checked)}</span></div>
+    ${c1}${c2}${c3}</div>`;
+}
+
 async function loadLive(savedAt){
   const el = document.getElementById('live');
   try{
     const res = await fetch('/api/refresh');
     const s = await res.json();
     if(!s.ok) throw 0;
+    renderNow(s.flow);
     const mins = savedAt ? Math.max(0, Math.round((Date.now() - Date.parse(savedAt)) / 60000)) : null;
     const ago = mins === null ? '' : mins < 60 ? `${mins} min ago` : `${Math.round(mins / 60)} hr ago`;
     el.innerHTML = s.paused

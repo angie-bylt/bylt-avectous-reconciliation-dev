@@ -24,7 +24,9 @@ export default async (req) => {
   const store = getStore({ name: 'bylt-refresh', consistency: 'strong' });
   if (req.method === 'GET') {
     if (new URL(req.url).searchParams.get('inspect')) return json(200, { ok: true, saved: await inspect(store) });
-    return json(200, summary(await getState(store)));
+    const flow = await store.get('flow:state', { type: 'json' }).catch(() => null);
+    const pick = f => f ? { checkedAt: f.checkedAt || null, waiting: f.waiting || null, recentIf: f.recentIf || null, latestOrder: f.latestOrder || null } : null;
+    return json(200, { ...summary(await getState(store)), flow: pick(flow) });
   }
   if (req.method === 'POST') {
     let body = {};

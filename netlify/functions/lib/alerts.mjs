@@ -86,7 +86,9 @@ export async function checkCards(store, result, note, savedAt) {
   // count orders from before today, so a breakdown today would otherwise wait
   // until tomorrow. Orders come in around the clock, so a 2-hour gap means stuck.
   const sh = result && result.shopify && !result.shopify.error ? result.shopify : null;
-  if (sh && sh.lastInNetSuite && savedAt) {
+  const flowSt = await store.get('flow:state', { type: 'json' }).catch(() => null);
+  const flowHasOrders = !!(flowSt && flowSt.latestOrder && flowSt.latestOrder.ok);   // the 15-minute check covers this
+  if (sh && sh.lastInNetSuite && savedAt && !flowHasOrders) {
     const gapMin = Math.round((Date.parse(savedAt) - Date.parse(sh.lastInNetSuite)) / 60000);
     const last = `${sh.lastInNetSuiteName || 'the last one'} at ${new Date(sh.lastInNetSuite).toLocaleString('en-US', { timeZone: 'America/Los_Angeles', weekday: 'short', hour: 'numeric', minute: '2-digit' })}`;
     const gapText = gapMin >= 120 ? `${Math.floor(gapMin / 60)} hr ${gapMin % 60} min` : `${gapMin} min`;

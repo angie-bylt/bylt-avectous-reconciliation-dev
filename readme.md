@@ -688,3 +688,16 @@ Replay of Oct 15-16: would have alerted at 11:30 PM (orders stopped ~10:10 PM).
   always quick. Rebuild still forces a full one. While a full refresh runs, the
   Integrations page shows "Switch to quick refresh" (action "quick"): stops it,
   keeps what it already pulled, and starts a quick refresh right away.
+- Oct 16: flow check reads the newest fulfillments whichever way the search is
+  sorted (first page if newest-first; else the last page, with a note to set
+  Sort By Date Created, Descending). The first run read only the oldest 10,000
+  rows and sent a false "no ship confirmations in 49 hr" alert.
+- Oct 16: "Right now" bar at the top of Systems, from the 15-minute flow check
+  (/api/refresh GET now includes flow: checkedAt, waiting, recentIf, latestOrder).
+  Third check: customsearch_dash_latest_orders (Sales Orders, main line, PO/Check
+  Number starts with #, Date Created on or after yesterday, sorted Date Created
+  descending; columns Internal ID, Document Number, PO/Check Number, Date Created).
+  No Shopify order in NetSuite for 2 hours = red + Slack; once this search works,
+  the hourly version of that alert steps aside. The flow check now runs even
+  without Slack set up (the bar still fills in); only sending needs Slack. A card
+  shows "Not set up yet" until its saved search exists.
