@@ -1,6 +1,6 @@
 // Status and controls for the automatic refresh, for the dashboard page.
 //   GET  /api/refresh                -> current state
-//   POST /api/refresh {action}       -> start | pause | now | full | cancel
+//   POST /api/refresh {action}       -> start | pause | now | full | cancel | quick
 import { getStore } from '@netlify/blobs';
 import { isAuthorized, getSecret } from './lib/auth.mjs';
 import { getState, request, inspect } from './lib/refresh-engine.mjs';
@@ -29,7 +29,7 @@ export default async (req) => {
   if (req.method === 'POST') {
     let body = {};
     try { body = await req.json(); } catch {}
-    if (!['start', 'pause', 'now', 'full', 'cancel'].includes(body.action)) return json(400, { ok: false, error: 'Unknown action' });
+    if (!['start', 'pause', 'now', 'full', 'cancel', 'quick'].includes(body.action)) return json(400, { ok: false, error: 'Unknown action' });
     return json(200, summary(await request(store, body.action)));
   }
   return json(405, { ok: false, error: 'GET or POST only' });

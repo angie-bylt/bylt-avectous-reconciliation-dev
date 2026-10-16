@@ -6,12 +6,13 @@ import { runTick } from './lib/refresh-engine.mjs';
 import * as clients from './lib/clients.mjs';
 import * as compute from './lib/compute.mjs';
 import * as alerts from './lib/alerts.mjs';
+import * as flow from './lib/flow.mjs';
 
 export default async () => {
   const store = getStore({ name: 'bylt-refresh', consistency: 'strong' });
   const results = getStore({ name: 'bylt-reconciliation', consistency: 'strong' });
   try {
-    const out = await runTick({ store, results, clients, compute, alerts });
+    const out = await runTick({ store, results, clients, compute, alerts, flow });
     console.log('refresh tick', JSON.stringify(out));
   } catch (err) {
     console.error('refresh tick failed', err);

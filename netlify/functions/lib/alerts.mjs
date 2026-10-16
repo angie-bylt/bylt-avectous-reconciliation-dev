@@ -106,29 +106,54 @@ export async function checkCards(store, result, note, savedAt) {
   await store.setJSON('alerts:state', st);
 }
 
-// Refresh health: stopped with an error, or running unusually long; then recovered.
+// Refresh health. Two separate alerts, each sent once per incident:
+//  - stopped with an error: always sent (even after a "taking long" alert),
+//    with what to do and who to contact, worked out from the error
+//  - taking unusually long: hourly updates over 2 hours; the weekly full
+//    refresh over 8 hours (it normally takes several hours)
+// Then one "running again" when a refresh finishes normally.
+function whatToDo(error) {
+  const e = String(error || '');
+  const logId = (/LogId\s*:?\s*([0-9a-f-]{36})/i.exec(e) || [])[1];
+  if (/avectous/i.test(e)) return ["*What to do:* Avectous's API is failing. Send this to Alan" + (logId ? ` (LogId ${logId})` : '') + '.',
+    'Also check that orders are still reaching Avectous; the 15-minute flow check will alert if they aren\u2019t.'];
+  if (/netsuite|\bns:|restlet/i.test(e)) return ['*What to do:* NetSuite isn\u2019t answering the dashboard. This usually clears on its own; the dashboard tries again next hour.',
+    'If it keeps happening, ask Tim to check the RESTlet (script 2500, deployment 2).'];
+  if (/shopify/i.test(e)) return ['*What to do:* Shopify isn\u2019t answering. The dashboard tries again next hour; if it lasts, check with Jordan that the BYLT Reporting app is still installed.'];
+  return ['*What to do:* nothing yet. The dashboard picks up where it stopped next hour. If this message repeats, send it to whoever maintains the dashboard.'];
+}
+
 export async function checkRefresh(store, rs, note) {
   if (!alertsConfigured()) return;
   const st = (await store.get('alerts:state', { type: 'json' })) || { cards: {} };
   const nowMs = Date.now();
-  let subject = null, lines = null;
+  const sends = [];
   const failed = rs.lastCycle && rs.lastCycle.ok === false;
-  const long = rs.status === 'running' && rs.cycleStartedAt && nowMs - Date.parse(rs.cycleStartedAt) > 2 * 3600 * 1000;
-  if ((failed || long) && !st.refreshDown) {
-    st.refreshDown = nowMs;
-    subject = failed ? 'Automatic refresh stopped' : 'Automatic refresh is taking unusually long';
-    lines = failed
-      ? ['The automatic refresh stopped with an error:', '', String(rs.lastCycle.error || rs.lastError || 'unknown error'), '', 'The dashboard is showing the last saved numbers. Check Recent activity on Integrations Status \u2013 Orders.']
-      : ['The automatic refresh has been running for over 2 hours. The dashboard is showing the last saved numbers.', '', `Current step: ${rs.progress || 'unknown'}`];
-  } else if (!failed && !long && st.refreshDown && rs.lastCycle && rs.lastCycle.ok) {
-    st.refreshDown = null;
-    subject = 'Automatic refresh is running again';
-    lines = ['The automatic refresh finished normally again. Numbers are current.'];
+  const limitH = rs.mode === 'full' ? 8 : 2;
+  const long = rs.status === 'running' && rs.cycleStartedAt && nowMs - Date.parse(rs.cycleStartedAt) > limitH * 3600 * 1000;
+  // stopped: once per stop (a new stop after a recovery or a resume alerts again)
+  const stopKey = failed ? (rs.lastCycle.endedAt || 'x') : null;
+  if (failed && st.refreshStoppedAt !== stopKey && !st.refreshStoppedNoted) {
+    st.refreshStoppedAt = stopKey; st.refreshStoppedNoted = true;
+    sends.push(['\uD83D\uDEA8 The dashboard\u2019s automatic refresh stopped.',
+      [`Error: ${String(rs.lastCycle.error || rs.lastError || 'unknown').slice(0, 300)}`, ...whatToDo(rs.lastCycle.error || rs.lastError),
+       'The dashboard is showing the last saved numbers until it recovers.']]);
   }
-  if (subject) {
-    try { await sendAlert(subject, lines); note(`Alert sent: ${subject}`); }
-    catch (err) { note(`Alert failed to send: ${err.message}`); }
+  if (long && !st.refreshLongNoted) {
+    st.refreshLongNoted = true;
+    sends.push([`\u23F3 The ${rs.mode === 'full' ? 'weekly full' : 'hourly'} refresh has been running over ${limitH} hours.`,
+      [`Current step: ${rs.progress || 'unknown'}`, '*What to do:* nothing yet. It keeps going, and you\u2019ll get another message if it stops.']]);
+  }
+  if (rs.status !== 'running' && rs.lastCycle && rs.lastCycle.ok && (st.refreshStoppedNoted || st.refreshLongNoted)) {   // only once a refresh has actually finished
+    st.refreshStoppedNoted = false; st.refreshLongNoted = false;
+    sends.push(['\u2705 The dashboard\u2019s automatic refresh is running again.', ['Numbers are current.']]);
+  }
+  if (sends.length) {
     await store.setJSON('alerts:state', st);
+    for (const [subject, lines] of sends) {
+      try { await sendAlert(subject, lines); note(`Alert sent: ${subject}`); }
+      catch (err) { note(`Alert failed to send: ${err.message}`); }
+    }
   }
 }
 

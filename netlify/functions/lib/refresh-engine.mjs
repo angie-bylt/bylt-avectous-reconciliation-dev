@@ -28,7 +28,6 @@ const SHIP_FROM = '2026-07-01';
 const CYCLE_EVERY_MIN = 60;
 const START_MINUTE = 45;            // refreshes start at :45 so numbers are fresh by the top of the hour (after Avectous's :31 pull)
 const hourSlot = ms => Math.floor((ms - START_MINUTE * 60000) / 3600000);
-const FULL_EVERY_DAYS = 7;
 const RUN_BUDGET_MS = 23000;        // stop starting new requests after this
 const HARD_LIMIT_MS = 28000;        // nothing may still be running after this
 const EST = { ns: 18000, av: 9000, merge: 12000, compute: 20000 };
@@ -151,9 +150,22 @@ export async function getState(store) {
 }
 async function putState(store, st) { await store.setJSON('state', st); }
 
+// The weekly full refresh (the safety net that re-reads everything) runs only at
+// night: Sunday 1-5 AM Pacific, or any night 1-5 AM if it's been over 8 days.
+// During the day, refreshes are always quick, so a full one never holds up
+// daytime numbers (Oct 16: a weekly full refresh ran into the morning).
+// Rebuild still forces a full one at any time.
+function inFullWindow(now, lastFullAt) {
+  const p = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Los_Angeles', weekday: 'short', hour: '2-digit', hour12: false }).formatToParts(new Date(now));
+  const day = (p.find(x => x.type === 'weekday') || {}).value;
+  const hour = Number((p.find(x => x.type === 'hour') || {}).value) % 24;
+  const night = hour >= 1 && hour < 5;
+  const ageDays = lastFullAt ? (now - Date.parse(lastFullAt)) / 864e5 : Infinity;
+  return night && ((day === 'Sun' && ageDays > 6) || ageDays > 8);
+}
+
 function buildCycle(st, now, haveSnapshots, forceFull) {
-  const full = forceFull || !haveSnapshots || !st.lastFullAt ||
-    (now - Date.parse(st.lastFullAt)) > FULL_EVERY_DAYS * 864e5;
+  const full = forceFull || !haveSnapshots || !st.lastFullAt || inFullWindow(now, st.lastFullAt);
   const since = st.lastSuccessAt ? nsDate(addDays(dayOf(Date.parse(st.cycleOfLastSuccess || st.lastSuccessAt)), -1)) : null;
   const shopSince = st.lastSuccessAt ? addDays(dayOf(Date.parse(st.cycleOfLastSuccess || st.lastSuccessAt)), -1) : null;
   return {
@@ -653,7 +665,7 @@ const STEP_FN = { ns: stepNs, avo: stepAvo, shp: stepShp, shopify: stepShopify, 
 const STEP_EST = { ns: EST.ns, avo: EST.av, shp: EST.av, shopify: 9000, resolve: EST.av, compute: EST.compute, reasons: EST.av };
 
 // ---------- one run ----------
-export async function runTick({ store, results, clients, compute, alerts = null, now = () => Date.now() }) {
+export async function runTick({ store, results, clients, compute, alerts = null, flow = null, now = () => Date.now() }) {
   const t0 = now();
   const st = await getState(store);
   if (st.lockUntil && st.lockUntil > t0) return { skipped: 'locked' };
@@ -673,6 +685,10 @@ export async function runTick({ store, results, clients, compute, alerts = null,
   };
 
   try {
+    // Flow check every 15 minutes, before anything else: works even when the
+    // refresh is paused, between updates, or stuck on a failing step.
+    if (flow) { try { await flow.runFlowCheck({ store, clients, alerts, nowMs: t0, note: ctx.note }); } catch (err) { ctx.note(`Flow check failed: ${err.message}`); } }
+
     if (st.status === 'idle') {
       // Due once per hour, at :10. A refresh still running at :10 just finishes; the next starts at the next :10.
       const due = !st.lastSuccessAt || st.lastSlot !== hourSlot(t0);
@@ -765,6 +781,15 @@ export async function request(store, action) {
   else if (action === 'now') { if (st.status === 'idle') st.requested = 'now'; }
   else if (action === 'full') { if (st.status === 'idle') st.requested = 'full'; }
   else if (action === 'cancel') { st.status = 'idle'; st.steps = []; st.cursor = null; st.requested = null; st.progress = ''; }
+  else if (action === 'quick') {
+    // Stop a running full refresh and do a quick one now. What the full refresh
+    // already pulled stays saved; the full one waits for Sunday night.
+    if (st.status === 'running' && st.mode === 'full') {
+      st.status = 'idle'; st.steps = []; st.cursor = null; st.resume = null; st.progress = '';
+      st.requested = 'now'; st.lastSlot = null;
+      st.history = [`${new Date().toISOString()} Switched to a quick refresh; the full refresh waits for Sunday night`, ...(st.history || [])].slice(0, 40);
+    }
+  }
   await putState(store, st);
   return st;
 }

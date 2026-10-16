@@ -3,7 +3,12 @@
 
 import crypto from 'node:crypto';
 
-export const NS_SEARCHES = { so: '4875', to: '4872', shop: 'customsearch5055' };  // shop: Sales Orders + Cash Sales, for the Shopify check
+export const NS_SEARCHES = {
+  so: '4875', to: '4872', shop: 'customsearch5055',
+  // Flow check (every 15 minutes), small searches straight against NetSuite:
+  waiting: 'customsearch_dash_orders_waiting',          // SOs pending fulfillment, no WMS export date, created in the last 2 days
+  recentIf: 'customsearch_dash_recent_fulfillments'     // item fulfillments created in the last 2 days
+};  // shop: Sales Orders + Cash Sales, for the Shopify check
 
 export const AV_REPORTS = {
   orders: { PageId: 6, PageName: 'Orders', PanelName: 'Orders' },

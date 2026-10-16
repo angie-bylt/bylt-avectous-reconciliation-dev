@@ -661,3 +661,30 @@ Dependency: nodemailer 6.9.14 (package.json).
   pulled, instead of starting over. Before this, a weekly full refresh that kept
   failing at the Avectous step (Avectous API error 1105, Oct 15-16) re-pulled all
   of NetSuite (~5 hours) on every retry.
+
+## Flow check (lib/flow.mjs), every 15 minutes
+Runs at the start of every scheduled run (skips itself until 15 minutes have
+passed), separate from the hourly refresh: works when paused, between updates,
+or while the refresh is stuck. Straight against NetSuite, two small searches:
+- customsearch_dash_orders_waiting: Sales Orders, main line, Pending
+  Fulfillment, WMS Export Date empty, Withhold from WMS false, Date Created
+  within the last 2 days. Columns: Internal ID, Document Number, PO/Check Number,
+  Date Created. 25+ orders from the last 24 hours still unsent after an hour ->
+  "🚨 N orders haven't reached Avectous" (once), then "✅ ... again".
+- customsearch_dash_recent_fulfillments: Item Fulfillments, main line, Date
+  Created within the last 2 days. Columns: Internal ID, Date Created. No new
+  fulfillment for 3 hours between 6 AM and 8 PM Pacific -> "🚨 No ship
+  confirmations have reached NetSuite in X" (once), then "✅ ... again".
+If a search doesn't exist yet, that check is skipped (noted once a day).
+Replay of Oct 15-16: would have alerted at 11:30 PM (orders stopped ~10:10 PM).
+- Oct 16: refresh alerts reworked. "Stopped" always sends once per incident (even
+  after a "taking long" alert) with "What to do" based on the error (Avectous ->
+  send to Alan with the LogId; NetSuite -> usually clears, else Tim / RESTlet;
+  Shopify -> Jordan / app installed). "Taking long" only past 2 hours for hourly
+  updates, 8 hours for the weekly full refresh. "Running again" only once a
+  refresh has actually finished.
+- Oct 16: the weekly full refresh runs only at night: Sunday 1-5 AM Pacific (if
+  6+ days since the last), or any night 1-5 AM if 8+ days. Daytime refreshes are
+  always quick. Rebuild still forces a full one. While a full refresh runs, the
+  Integrations page shows "Switch to quick refresh" (action "quick"): stops it,
+  keeps what it already pulled, and starts a quick refresh right away.

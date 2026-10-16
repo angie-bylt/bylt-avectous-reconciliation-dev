@@ -42,6 +42,7 @@
         <div class="sub" id="autoLine" style="margin:4px 0 0;">Checking&hellip;</div>
       </div>
       <div style="display:flex; gap:8px;">
+        <button class="ghost" id="autoQuickBtn" type="button" style="display:none;" title="Stop the full refresh and get current numbers in about 30 minutes; the full one waits for Sunday night">Switch to quick refresh</button>
         <button class="ghost" id="autoRebuildBtn" type="button" title="Throw away the saved copy and pull everything again">Rebuild</button>
         <button class="ghost" id="autoNowBtn" type="button">Refresh now</button>
         <button class="ghost" id="autoToggleBtn" type="button">Start</button>
@@ -558,6 +559,7 @@ function renderAuto(){
   if(s.lastSuccessAt) parts.push(`Last finished ${fmtWhen(s.lastSuccessAt)}.`);
   if(s.lastError && s.status === 'running') parts.push(`Retrying after: ${s.lastError.replace(/^\S+ /,'')}`);
   if(s.lastCycle && s.lastCycle.ok === false) parts.push(`Last attempt stopped: ${s.lastCycle.error}`);
+  document.getElementById('autoQuickBtn').style.display = (s.status === 'running' && s.mode === 'full') ? '' : 'none';
   line.textContent = parts.join(' ');
   document.getElementById('autoHistory').textContent = (s.history || []).map(h => {
     const t = new Date(h.slice(0, 24));
@@ -584,7 +586,10 @@ async function loadAuto(action){
 document.getElementById('autoToggleBtn').addEventListener('click', ()=> loadAuto(autoState && !autoState.paused ? 'pause' : 'start'));
 document.getElementById('autoNowBtn').addEventListener('click', ()=> loadAuto('now'));
 document.getElementById('autoRebuildBtn').addEventListener('click', ()=>{
-  if(confirm('Pull everything from NetSuite and Avectous again? Takes a few hours in the background; the current numbers stay up until it finishes.')) loadAuto('full');
+  if(confirm('Pull everything from NetSuite and Avectous again now? Takes a few hours in the background; the current numbers stay up until it finishes. (This happens automatically every Sunday night.)')) loadAuto('full');
+});
+document.getElementById('autoQuickBtn').addEventListener('click', ()=>{
+  if(confirm('Stop the full refresh and do a quick one now? Current numbers in about 30 minutes; the full refresh runs Sunday night instead.')) loadAuto('quick');
 });
 document.getElementById('autoReload').addEventListener('click', e=>{ e.preventDefault(); location.reload(); });
 loadAuto();
