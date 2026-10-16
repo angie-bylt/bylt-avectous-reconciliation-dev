@@ -656,3 +656,8 @@ Dependency: nodemailer 6.9.14 (package.json).
 - Oct 14: Systems > "Send summary to Slack" posts the daily summary now from the
   latest saved numbers (/api/alert-test?summary=1). Doesn't affect the 7:30 AM
   schedule or its "since yesterday" comparison.
+- Oct 16: a refresh stopped after 6 errors in a row now resumes next hour at the
+  step that failed (st.resume, within 12 hours), keeping everything already
+  pulled, instead of starting over. Before this, a weekly full refresh that kept
+  failing at the Avectous step (Avectous API error 1105, Oct 15-16) re-pulled all
+  of NetSuite (~5 hours) on every retry.

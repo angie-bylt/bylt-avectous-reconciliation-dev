@@ -32,7 +32,8 @@ const FULL_EVERY_DAYS = 7;
 const RUN_BUDGET_MS = 23000;        // stop starting new requests after this
 const HARD_LIMIT_MS = 28000;        // nothing may still be running after this
 const EST = { ns: 18000, av: 9000, merge: 12000, compute: 20000 };
-const MAX_ERRORS = 6;               // in a row, before a cycle is abandoned
+const MAX_ERRORS = 6;               // in a row, before a cycle is stopped (it resumes at that step next hour)
+const RESUME_WITHIN_MS = 12 * 3600 * 1000;   // a stopped refresh resumes if it stopped in the last 12 hours
 const RESOLVE_CAP = 120;            // single-order lookups per cycle
 
 const AVO_KEEP = ['OrderNumber', 'Status', 'OrderType', 'Channel', 'ChannelOrderNumber', 'OrderDate', 'Profile'];
@@ -677,11 +678,19 @@ export async function runTick({ store, results, clients, compute, alerts = null,
       const due = !st.lastSuccessAt || st.lastSlot !== hourSlot(t0);
       if (st.paused && !st.requested) return { skipped: 'paused' };
       if (!due && !st.requested) return { skipped: 'not due' };
-      const haveSnapshots = !!(await store.get('snap:ns-so', { type: 'json' }));
-      const c = buildCycle(st, t0, haveSnapshots, st.requested === 'full');
+      const r = st.resume;
+      const resumeOk = r && st.requested !== 'full' && r.step > 0 && (t0 - Date.parse(r.at)) < RESUME_WITHIN_MS;
+      st.resume = null;
       st.lastSlot = hourSlot(t0);
-      Object.assign(st, { status: 'running', steps: c.steps, mode: c.mode, step: 0, cursor: {}, cycleStartedAt: new Date(t0).toISOString(), requested: null, errors: 0, lastError: null, leftOpen: [] });
-      ctx.note(`Started a${c.mode === "incremental" ? "n" : ""} ${c.mode} refresh`);
+      if (resumeOk) {
+        Object.assign(st, { status: 'running', steps: r.steps, mode: r.mode, step: r.step, cursor: {}, cycleStartedAt: r.cycleStartedAt, requested: null, errors: 0, lastError: null, leftOpen: st.leftOpen || [] });
+        ctx.note(`Resuming the ${r.mode} refresh at step ${r.step + 1} of ${r.steps.length} (${r.steps[r.step].kind}), keeping what was already pulled`);
+      } else {
+        const haveSnapshots = !!(await store.get('snap:ns-so', { type: 'json' }));
+        const c = buildCycle(st, t0, haveSnapshots, st.requested === 'full');
+        Object.assign(st, { status: 'running', steps: c.steps, mode: c.mode, step: 0, cursor: {}, cycleStartedAt: new Date(t0).toISOString(), requested: null, errors: 0, lastError: null, leftOpen: [] });
+        ctx.note(`Started a${c.mode === "incremental" ? "n" : ""} ${c.mode} refresh`);
+      }
     }
 
     if (st.status === 'running' && st.cutoffs >= 3) {
@@ -712,6 +721,9 @@ export async function runTick({ store, results, clients, compute, alerts = null,
         st.lastError = `${new Date(now()).toISOString()} ${step.kind}: ${err.message}`;
         if (st.errors >= MAX_ERRORS) {
           ctx.note(`Refresh stopped after ${MAX_ERRORS} errors in a row: ${err.message}`);
+          // Remember where it stopped: the next hour picks up at this step and
+          // keeps everything already pulled, instead of starting over.
+          if (!/full rebuild queued/.test(err.message)) st.resume = { steps: st.steps, step: st.step, mode: st.mode, cycleStartedAt: st.cycleStartedAt, at: new Date(now()).toISOString() };
           st.status = 'idle'; st.lastCycle = { ok: false, endedAt: new Date(now()).toISOString(), error: err.message };
           st.lastSuccessAt = st.lastSuccessAt; // unchanged; next cycle starts on schedule
           st.failedAt = new Date(now()).toISOString();
