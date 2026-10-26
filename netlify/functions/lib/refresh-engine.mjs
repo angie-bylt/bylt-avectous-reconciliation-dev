@@ -25,12 +25,16 @@
 const FINAL_STATUSES = ['shipped', 'cancelled'];
 const DEFAULT_OPEN_STATUSES = ['New', 'Batched', 'Waved', 'Picked', 'Packed'];
 const SHIP_FROM = '2026-07-01';
+const SHP_MAX_MIN = 25;          // one-by-one lookups of older shipped orders: at most 25 minutes per update; the rest carry over
+const SHP_REPAIR_MAX = 6000;     // repair check: shipped-in-Avectous orders with no shipment saved, queued per update
+const SHP_LOOKUP_PARALLEL = 6;   // confirmation lookups run 6 at a time
 const CYCLE_EVERY_MIN = 60;
 const START_MINUTE = 45;            // refreshes start at :45 so numbers are fresh by the top of the hour (after Avectous's :31 pull)
 const hourSlot = ms => Math.floor((ms - START_MINUTE * 60000) / 3600000);
 const RUN_BUDGET_MS = 23000;        // stop starting new requests after this
 const HARD_LIMIT_MS = 28000;        // nothing may still be running after this
 const EST = { ns: 18000, av: 9000, merge: 12000, compute: 20000 };
+const MAX_TIMEOUTS = 30;           // timeouts in a row before a cycle is stopped (they're retried each minute)
 const MAX_ERRORS = 6;               // in a row, before a cycle is stopped (it resumes at that step next hour)
 const RESUME_WITHIN_MS = 12 * 3600 * 1000;   // a stopped refresh resumes if it stopped in the last 12 hours
 const RESOLVE_CAP = 120;            // single-order lookups per cycle
@@ -150,22 +154,23 @@ export async function getState(store) {
 }
 async function putState(store, st) { await store.setJSON('state', st); }
 
-// The weekly full refresh (the safety net that re-reads everything) runs only at
-// night: Sunday 1-5 AM Pacific, or any night 1-5 AM if it's been over 8 days.
-// During the day, refreshes are always quick, so a full one never holds up
-// daytime numbers (Oct 16: a weekly full refresh ran into the morning).
+// The weekly full refresh (the safety net that re-reads everything) takes 8+
+// hours, so it only starts Saturday 10 PM to Sunday 4 AM Pacific, and only if the
+// last full one was 6+ days ago. If it doesn't finish, is switched to quick, or
+// stops, it waits for next Saturday: no nightly retries (Oct 17-21 a full refresh
+// that never finished started again every night at 1:45 AM and ran into the day).
 // Rebuild still forces a full one at any time.
-function inFullWindow(now, lastFullAt) {
+function inFullWindow(now, lastFullAt, lastFullTryAt) {
   const p = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Los_Angeles', weekday: 'short', hour: '2-digit', hour12: false }).formatToParts(new Date(now));
   const day = (p.find(x => x.type === 'weekday') || {}).value;
   const hour = Number((p.find(x => x.type === 'hour') || {}).value) % 24;
-  const night = hour >= 1 && hour < 5;
-  const ageDays = lastFullAt ? (now - Date.parse(lastFullAt)) / 864e5 : Infinity;
-  return night && ((day === 'Sun' && ageDays > 6) || ageDays > 8);
+  const inWindow = (day === 'Sat' && hour >= 22) || (day === 'Sun' && hour < 4);
+  const since = iso => iso ? (now - Date.parse(iso)) / 864e5 : Infinity;
+  return inWindow && since(lastFullAt) > 6 && since(lastFullTryAt) > 6;
 }
 
 function buildCycle(st, now, haveSnapshots, forceFull) {
-  const full = forceFull || !haveSnapshots || !st.lastFullAt || inFullWindow(now, st.lastFullAt);
+  const full = forceFull || !haveSnapshots || !st.lastFullAt || inFullWindow(now, st.lastFullAt, st.lastFullTryAt);
   const since = st.lastSuccessAt ? nsDate(addDays(dayOf(Date.parse(st.cycleOfLastSuccess || st.lastSuccessAt)), -1)) : null;
   const shopSince = st.lastSuccessAt ? addDays(dayOf(Date.parse(st.cycleOfLastSuccess || st.lastSuccessAt)), -1) : null;
   return {
@@ -302,27 +307,46 @@ async function stepAvo(ctx, step, cur) {
       }
       const map = new Map();
       if (old) for (const a of old.rows) { const o = {}; old.headers.forEach((h, i) => { o[h] = a[i]; }); map.set(String(o.OrderNumber), o); }
+      const skippedSt = new Set(cur.skippedStatuses || []);
       for (const [k, o] of map) {
-        if (isOpen(o.Status) && !fetched.has(k)) st.leftOpen.push({ OrderNumber: k, day: isoDay(o.OrderDate) });
+        if (isOpen(o.Status) && !fetched.has(k) && !skippedSt.has(String(o.Status))) st.leftOpen.push({ OrderNumber: k, day: isoDay(o.OrderDate), ch: o.Channel || '', co: o.ChannelOrderNumber || '' });
       }
       for (const [k, o] of fetched) map.set(k, o);
       rows = [...map.values()];
-      ctx.note(`Avectous orders: ${fetched.size} open/new orders refreshed, ${st.leftOpen.length} left an open status`);
+      ctx.note(`Avectous orders: ${fetched.size} open/new orders refreshed, ${st.leftOpen.length} left an open status` + ((cur.skipped || []).length ? `; too slow at Avectous: ${cur.skipped.join(', ')} (kept as before, retried next hour)` : ''));
     } else {
       rows = [...fetched.values()];
       ctx.note(`Avectous orders: ${rows.length} orders`);
     }
     await writeTable(store, 'avo', AVO_KEEP, toArrays(rows, AVO_KEEP));
+    st.stale = { ...(st.stale || {}), avo: (cur.skipped || []).length ? { items: cur.skipped, at: new Date().toISOString() } : null };
+    if (step.incremental) trackStale(st, 'avo', cur.skipped || []);
     await clearWork(store, 'avo', cur.pages);
     return true;
   }
   const q = cur.queries[cur.q];
+  if (cur.qStartFor !== cur.q) { cur.qStart = cur.pages; cur.qStartFor = cur.q; }
   let page;
   try {
     page = await clients.avPage({ report: 'orders', pageIndex: cur.page, pageLimit: cur.size, parameters: q || undefined, timeoutMs: ctx.timeLeft() - 1500 });
   } catch (err) {
-    if (err.message === 'TIMEOUT' && cur.size > 250 && ((cur.page - 1) * cur.size) % (cur.size / 2) === 0) {
+    const slow = /timeout|timed out|abort/i.test(err.message);
+    if (slow && cur.size > 125) {
       cur.page = ((cur.page - 1) * 2) + 1; cur.size /= 2; return false;
+    }
+    if (slow && step.incremental && q) {
+      // Still too slow at 125 rows: try once more next minute, then skip this query
+      // for the hour, keeping its orders as they were. (A full pull can't skip; it
+      // keeps retrying.)
+      cur.qFails = (cur.qFails || 0) + 1;
+      if (cur.qFails < 2) return 'wait';
+      for (let i = cur.qStart ?? cur.pages; i < cur.pages; i++) await store.delete(`work:avo:${i}`).catch(() => {});
+      cur.pages = cur.qStart ?? cur.pages;
+      (cur.skipped ??= []).push(q.Status ? `status ${q.Status}` : `order date ${q.OrderDate}`);
+      if (q.Status) (cur.skippedStatuses ??= []).push(q.Status);
+      cur.q++; cur.page = 1; cur.size = 1000; cur.qFails = 0; cur.qStart = cur.pages;
+      if (cur.q >= cur.queries.length) cur.finished = true;
+      return false;
     }
     throw err;
   }
@@ -341,25 +365,91 @@ async function stepAvo(ctx, step, cur) {
   }
   ctx.progress = `Avectous orders: ${q ? (q.Status ? `status ${q.Status}` : `order date ${q.OrderDate}`) : 'full report'}, page ${cur.page}${page.total ? ` of ${Math.ceil(page.total / cur.size)}` : ''}`;
   if (page.hasMore && page.rows.length) { cur.page++; return false; }
-  cur.q++; cur.page = 1; cur.size = 1000;
+  cur.q++; cur.page = 1; cur.size = 1000; cur.qFails = 0;
   if (cur.q >= cur.queries.length) cur.finished = true;
   return false;
+}
+
+// Pieces Avectous was too slow for: when each was first skipped, so a piece that
+// stays behind for hours can be flagged. A piece that refreshes drops off.
+function trackStale(st, kind, keys) {
+  const now = new Date().toISOString();
+  const since = { ...(st.staleSince || {}) };
+  for (const k of Object.keys(since)) if (k.startsWith(kind + ':') && !keys.includes(k.slice(kind.length + 1))) delete since[k];
+  for (const k of keys) since[`${kind}:${k}`] ??= now;
+  st.staleSince = since;
 }
 
 async function stepShp(ctx, step, cur) {
   const { store, clients, st } = ctx;
   cur.pages ??= 0;
+  // A weekly full refresh already partway through the old day-by-day shipments pull
+  // (started before this version) switches to the quick method instead of finishing
+  // the slow way.
+  if (!step.incremental && cur.days && cur.days.length > 10 && !cur.lookups && !cur.checkedOld) {
+    cur.checkedOld = true;
+    const have = await readTable(store, 'shp').catch(() => null);
+    if (have && have.rows && have.rows.length) {
+      await clearWork(store, 'shp', cur.pages);
+      for (const k of Object.keys(cur)) delete cur[k];
+      cur.pages = 0;
+      step.incremental = true;
+      ctx.note('Avectous shipments: switched an in-progress weekly pull to the quick method plus the repair check');
+    }
+  }
   if (!cur.days) {
     const today = dayOf(Date.now());
+    if (!step.incremental) {
+      // Weekly full refresh: re-reading every order date of shipments stopped working
+      // once Avectous slowed down (Oct 24-26: the big recent days were too slow, their
+      // older copies were kept, and Saturday's shipments went missing). With a saved
+      // copy, use the quick method below plus the repair check; only a first build
+      // (no saved copy) re-reads every day.
+      const have = await readTable(store, 'shp').catch(() => null);
+      if (have && have.rows && have.rows.length) { step.incremental = true; ctx.note('Avectous shipments: weekly refresh uses the quick method plus the repair check'); }
+    }
     if (step.incremental) {
-      const set = new Set([addDays(today, -1), today]);
-      for (const o of st.leftOpen || []) if (o.day) set.add(o.day);
-      cur.days = [...set].sort();
+      // Every hour: shipments for yesterday and today, by order date (small). For
+      // older orders, only the ones that just left an open status (they're the ones
+      // that shipped) are looked up one by one on Shipment Confirmations, by order
+      // number, plus any not reached last hour. No whole old days are re-read
+      // (Oct 22: re-reading big old days took 30-45 minutes each at Avectous's speed).
+      const base = [addDays(today, -1), today];
+      cur.days = base;
+      const queue = new Map();
+      for (const o of [...(st.shpPending || []), ...(st.leftOpen || [])]) {
+        if (o && o.OrderNumber && o.day && !base.includes(o.day)) queue.set(o.OrderNumber, o);
+      }
+      // Repair check: any order Avectous has as Shipped but with no shipment saved
+      // here (whatever the cause) is looked up too, oldest order date first, up to
+      // SHP_REPAIR_MAX per update. This backfills gaps on its own.
+      try {
+        const [avo, shp] = await Promise.all([readTable(store, 'avo'), readTable(store, 'shp')]);
+        const noConf = st.shpNoShip || {};   // (shpNoConf from Oct 26 morning was wrong: ignored)
+        if (avo && shp) {
+          const have = new Set(shp.rows.map(r => String(r[shp.headers.indexOf('OrderNumber')])));
+          const iN = avo.headers.indexOf('OrderNumber'), iS = avo.headers.indexOf('Status'), iD = avo.headers.indexOf('OrderDate'), iC = avo.headers.indexOf('Channel'), iCo = avo.headers.indexOf('ChannelOrderNumber');
+          const gaps = [];
+          for (const r of avo.rows) {
+            const n = String(r[iN] || '');
+            if (!n || queue.has(n) || have.has(n) || String(r[iS] || '').trim().toLowerCase() !== 'shipped') continue;
+            if (noConf[n] && Date.now() - noConf[n] < 864e5) continue;   // looked up in the last day, no confirmation
+            const d = isoDay(r[iD]);
+            if (!d || d < SHIP_FROM || base.includes(d)) continue;
+            gaps.push({ OrderNumber: n, day: d, ch: r[iC] || '', co: r[iCo] || '' });
+          }
+          gaps.sort((x, y) => x.day.localeCompare(y.day));
+          cur.repairs = gaps.length;
+          for (const g of gaps.slice(0, SHP_REPAIR_MAX)) queue.set(g.OrderNumber, g);
+        }
+      } catch (err) { ctx.note(`Avectous shipments: repair check skipped (${err.message})`); }
+      cur.lookups = [...queue.values()];
+      cur.li = 0; cur.found = []; cur.notFound = 0;
     } else {
       cur.days = [];
       for (let d = SHIP_FROM; d <= today; d = addDays(d, 1)) cur.days.push(d);
     }
-    cur.d = 0; cur.page = 1;
+    cur.d = 0; cur.page = 1; cur.startedAt = Date.now();
   }
   if (cur.finished) {
     const { objs } = await readWork(store, 'shp', cur.pages);
@@ -375,19 +465,75 @@ async function stepShp(ctx, step, cur) {
         ctx.note(`Avectous shipments: saved copy unusable (${why}), pulling every order date instead`);
         return false;
       }
-      const days = new Set(cur.days);
+      const skipped = new Set(cur.skipped || []);
+      const days = new Set(cur.days.filter(d => !skipped.has(d)));
       const oIdx = old.headers.indexOf('OrderDate');
-      const kept = old.rows.filter(a => !days.has(isoDay(a[oIdx])));
-      rows = kept.concat(toArrays(fresh, SHP_KEEP));
+      const nIdx = old.headers.indexOf('OrderNumber');
+      const looked = new Set((cur.found || []).map(r => r.OrderNumber));
+      const kept = old.rows.filter(a => !days.has(isoDay(a[oIdx])) && !looked.has(String(a[nIdx])));
+      rows = kept.concat(toArrays(fresh, SHP_KEEP), toArrays(cur.found || [], SHP_KEEP));
     } else {
       rows = toArrays(fresh, SHP_KEEP);
+      if ((cur.skipped || []).length) {
+        // full pull with a skipped date: keep that date's rows from the saved copy
+        const old = await readTable(store, 'shp').catch(() => null);
+        if (old) {
+          const skipped = new Set(cur.skipped);
+          const oIdx = old.headers.indexOf('OrderDate');
+          rows = rows.concat(old.rows.filter(a => skipped.has(isoDay(a[oIdx]))));
+        }
+      }
     }
     await writeTable(store, 'shp', SHP_KEEP, rows);
-    ctx.note(`Avectous shipments: ${cur.days.length} order date(s) refreshed, ${fresh.length} shipment rows`);
+    st.stale = { ...(st.stale || {}), shp: (cur.skipped || []).length ? { dates: cur.skipped, at: new Date().toISOString() } : null };
+    { const done = { ...(st.shpDayRefreshed || {}) }; const sk = new Set(cur.skipped || []); const nowIso = new Date().toISOString();
+      for (const d of cur.days) if (!sk.has(d)) done[d] = nowIso;
+      for (const d of Object.keys(done)) if (Date.now() - Date.parse(done[d]) > 30 * 864e5) delete done[d];
+      st.shpDayRefreshed = done; }
+    trackStale(st, 'shp', cur.skipped || []);
+    const sk = (cur.skipped || []).length;
+    const looks = cur.lookups ? `; ${cur.li || 0} older orders looked up (${(cur.found || []).length} shipments found)` + ((st.shpPending || []).length ? `, ${st.shpPending.length} carried to next hour` : '') + (cur.repairs ? `; repair check: ${cur.repairs} shipped orders had no shipment saved` : '') : '';
+    ctx.note(`Avectous shipments: ${cur.days.length - sk} order date(s) refreshed, ${fresh.length} shipment rows` + looks + (sk ? `; ${sk} too slow at Avectous (${cur.skipped.join(', ')}), kept their earlier shipments and will retry next hour` : ''));
     await clearWork(store, 'shp', cur.pages);
     return true;
   }
+  if (cur.d >= cur.days.length && cur.lookups) {
+    // One-by-one lookups for older orders that just shipped. At most SHP_MAX_MIN
+    // minutes per update; whatever isn't reached (or times out) carries over to the
+    // next hour, so nothing is dropped and the update always moves on.
+    cur.lookStart ??= Date.now();
+    // SHP_LOOKUP_PARALLEL lookups at a time, so a big catch-up (like a weekend) fits
+    // in one update.
+    const one = async o => {
+      try {
+        // Look the order up on Shipments by Order/Tracking (11900), the same report the
+        // saved shipments come from, so order numbers match exactly. (Oct 26: Shipment
+        // Confirmations stores numbers with a shipment suffix, e.g. #55847532-DI-1, so
+        // looking up #55847532 there found nothing and no shipments were added.)
+        const page = await clients.avPage({ report: 'shipments', pageIndex: 1, pageLimit: 50, parameters: { OrderNumber: o.OrderNumber }, timeoutMs: Math.min(15000, ctx.timeLeft() - 1500) });
+        const hits = page.rows.filter(r => String(r.OrderNumber) === o.OrderNumber && r.ShipDate);
+        for (const r of hits) cur.found.push({ OrderNumber: r.OrderNumber, ChannelOrderNumber: r.ChannelOrderNumber || o.co || '', ShipDate: r.ShipDate, OrderDate: r.OrderDate || `${o.day}T00:00:00`, Channel: r.Channel || o.ch || '', TrackingNo: r.TrackingNo || '', TotalQtyShipped: r.TotalQtyShipped ?? '', LinesShipped: r.LinesShipped ?? '' });
+        if (!hits.length) { cur.notFound++; (st.shpNoShip ??= {})[o.OrderNumber] = Date.now(); }   // no shipment (cancelled, held): nothing to add, not re-checked for a day
+      } catch (err) {
+        if (!/timeout|timed out|abort/i.test(err.message)) (cur.retry ??= []).push(o);   // any error: try again next hour
+        else (cur.retry ??= []).push(o);                                                // slow answer: try again next hour
+      }
+    };
+    while (cur.li < cur.lookups.length && ctx.timeLeft() > 17000) {
+      if (Date.now() - cur.lookStart > SHP_MAX_MIN * 60000) break;
+      const batch = cur.lookups.slice(cur.li, cur.li + SHP_LOOKUP_PARALLEL);
+      cur.li += batch.length;
+      await Promise.all(batch.map(one));
+    }
+    if (cur.li < cur.lookups.length && Date.now() - cur.lookStart <= SHP_MAX_MIN * 60000) return 'wait';
+    st.shpPending = [...(cur.retry || []), ...cur.lookups.slice(cur.li)].slice(0, 5000);
+    delete st.shpNoConf;
+    if (st.shpNoShip) for (const [k, t] of Object.entries(st.shpNoShip)) if (Date.now() - t > 864e5) delete st.shpNoShip[k];
+    cur.finished = true;
+    return false;
+  }
   const day = cur.days[cur.d];
+  if (cur.dayStartFor !== day) { cur.dayStart = cur.pages; cur.dayStartFor = day; }
   // Slow days (big order days) can take Avectous longer than one run allows at
   // 1,000 rows a page. On a timeout, ask for smaller pages (1,000 -> 500 -> 250
   // -> 125), keeping our place, like the manual pull button does.
@@ -396,11 +542,26 @@ async function stepShp(ctx, step, cur) {
   try {
     page = await clients.avPage({ report: 'shipments', pageIndex: cur.page, pageLimit: cur.limit, parameters: { OrderDate: `${day} 00:00:00` }, timeoutMs: ctx.timeLeft() - 1500 });
   } catch (err) {
-    if (/timeout|timed out|abort/i.test(err.message) && cur.limit > 125) {
+    const slow = /timeout|timed out|abort/i.test(err.message);
+    if (slow && cur.limit > 125) {
       const done = (cur.page - 1) * cur.limit;      // rows of this day already saved
       cur.limit = cur.limit / 2;
       cur.page = done / cur.limit + 1;
       ctx.note(`Avectous shipments: order date ${day} was slow, now asking for ${cur.limit} rows at a time`);
+      return false;
+    }
+    if (slow) {
+      // Already at the smallest size and still too slow: Avectous can't answer for
+      // this date right now. Try once more next minute, then skip the date for this
+      // hour so one slow day can't hold up the whole refresh (Oct 22: order date
+      // 10/14 timed out at every size and stopped the refresh hour after hour).
+      cur.dayFails = (cur.dayFails || 0) + 1;
+      if (cur.dayFails < 2) return 'wait';
+      for (let i = cur.dayStart ?? cur.pages; i < cur.pages; i++) await store.delete(`work:shp:${i}`).catch(() => {});
+      cur.pages = cur.dayStart ?? cur.pages;        // drop the partial pieces of this date
+      (cur.skipped ??= []).push(day);
+      cur.d++; cur.page = 1; cur.limit = 1000; cur.dayFails = 0; cur.dayStart = cur.pages;
+      if (cur.d >= cur.days.length && !cur.lookups) cur.finished = true;
       return false;
     }
     throw err;
@@ -411,8 +572,8 @@ async function stepShp(ctx, step, cur) {
   }
   ctx.progress = `Avectous shipments: order date ${day} (${cur.d + 1} of ${cur.days.length})`;
   if (page.hasMore && page.rows.length) { cur.page++; return false; }
-  cur.d++; cur.page = 1; cur.limit = 1000;
-  if (cur.d >= cur.days.length) cur.finished = true;
+  cur.d++; cur.page = 1; cur.limit = 1000; cur.dayFails = 0;
+  if (cur.d >= cur.days.length && !cur.lookups) cur.finished = true;
   return false;
 }
 
@@ -432,9 +593,14 @@ async function stepResolve(ctx, step, cur) {
   }
   if (cur.i < cur.todo.length) {
     const num = cur.todo[cur.i];
-    const page = await clients.avPage({ report: 'orders', pageIndex: 1, pageLimit: 10, parameters: { OrderNumber: num }, timeoutMs: ctx.timeLeft() - 1500 });
-    const hit = page.rows.find(r => String(r.OrderNumber) === num);
-    if (hit) cur.updates[num] = hit.Status;
+    try {
+      const page = await clients.avPage({ report: 'orders', pageIndex: 1, pageLimit: 10, parameters: { OrderNumber: num }, timeoutMs: ctx.timeLeft() - 1500 });
+      const hit = page.rows.find(r => String(r.OrderNumber) === num);
+      if (hit) cur.updates[num] = hit.Status;
+    } catch (err) {
+      if (!/timeout|timed out|abort/i.test(err.message)) throw err;
+      cur.slowSkipped = (cur.slowSkipped || 0) + 1;   // left as it was; looked up again next hour
+    }
     cur.i++;
     ctx.progress = `Checking orders that left an open status: ${cur.i} of ${cur.todo.length}`;
     return false;
@@ -571,6 +737,7 @@ async function stepReasons(ctx, step, cur) {
 // then only orders changed since the last refresh. A Shopify problem never
 // holds up the rest of the refresh: after 3 failed tries it's skipped this hour.
 const SHOPIFY_FROM = '2026-08-06';
+const SHOPIFY_DATA_VERSION = 2;   // saved copies older than this are rebuilt once with a full pull (Oct 22 loss)
 const SHOPIFY_PIECE_BYTES = 4 * 1024 * 1024;   // ~4 MB of the export file per request
 function shopStatus(n) {
   if (n.cancelledAt) return 'cancelled';
@@ -598,6 +765,7 @@ async function stepShopify(ctx, step, cur) {
       const prev = await store.get('shopify:orders', { type: 'json' }).catch(() => null);
       cur.checked = true;
       if (!prev || prev.source !== 'api') { step.incremental = false; ctx.note('Shopify: first pull from the API, getting every order since go-live'); }
+      else if ((prev.version || 1) < SHOPIFY_DATA_VERSION) { step.incremental = false; ctx.note('Shopify: rebuilding the saved Shopify orders with one full pull (the saved copy lost orders on Oct 22)'); }
     }
     if (!cur.tz) cur.tz = await clients.shopifyTimezone(store);
     if (!cur.bulkId) {
@@ -638,14 +806,25 @@ async function stepShopify(ctx, step, cur) {
       if (pg) for (const r of pg.rows) rows.push(r);
     }
 
-    const prev = step.incremental ? await store.get('shopify:orders', { type: 'json' }).catch(() => null) : null;
+    // Merge into the saved copy. If the saved copy can't be read, DON'T save just the
+    // changes (Oct 22: a failed read replaced ~220,000 saved orders with ~49,000
+    // changed ones). Read it again; if it still fails, try the whole step again next
+    // minute. Also refuse a merge that would shrink the saved copy by more than 2%.
+    let prev = null;
+    if (step.incremental) {
+      for (let i = 0; i < 2 && !(prev && prev.rows); i++) prev = await store.get('shopify:orders', { type: 'json' }).catch(() => null);
+      if (!(prev && prev.rows && prev.rows.length)) throw new Error('Shopify: could not read the saved Shopify orders to merge into; will try again');
+    }
     const byName = new Map((prev && prev.rows || []).map(r => [r[0], r]));
     const before = byName.size;
     for (const r of rows) byName.set(r[0], r);
     const all = [...byName.values()];
+    const high = Math.max(Number(ctx.st.shopifyHigh || 0), step.incremental ? before : 0);
+    if (high && all.length < high * 0.98) throw new Error(`Shopify: saved orders would drop from ${high.toLocaleString()} to ${all.length.toLocaleString()}; not saving, will try again`);
+    ctx.st.shopifyHigh = Math.max(high, all.length);
     let from = null, through = null;
     for (const r of all) { if (!through || r[1] > through) through = r[1]; if (!from || r[1] < from) from = r[1]; }
-    await store.setJSON('shopify:orders', { source: 'api', uploadedAt: new Date().toISOString(), from, through, files: [], rows: all });
+    await store.setJSON('shopify:orders', { source: 'api', version: SHOPIFY_DATA_VERSION, uploadedAt: new Date().toISOString(), from, through, files: [], rows: all });
     await clearWork(store, 'shopify', cur.pages);
     ctx.note(step.incremental
       ? `Shopify orders: ${rows.length.toLocaleString()} changed orders merged (${before.toLocaleString()} -> ${all.length.toLocaleString()})`
@@ -705,6 +884,7 @@ export async function runTick({ store, results, clients, compute, alerts = null,
         const haveSnapshots = !!(await store.get('snap:ns-so', { type: 'json' }));
         const c = buildCycle(st, t0, haveSnapshots, st.requested === 'full');
         Object.assign(st, { status: 'running', steps: c.steps, mode: c.mode, step: 0, cursor: {}, cycleStartedAt: new Date(t0).toISOString(), requested: null, errors: 0, lastError: null, leftOpen: [] });
+        if (c.mode === 'full') st.lastFullTryAt = new Date(t0).toISOString();
         ctx.note(`Started a${c.mode === "incremental" ? "n" : ""} ${c.mode} refresh`);
       }
     }
@@ -730,8 +910,19 @@ export async function runTick({ store, results, clients, compute, alerts = null,
       let done;
       try {
         done = await STEP_FN[step.kind](ctx, step, st.cursor);
-        st.errors = 0;
+        st.errors = 0; st.timeouts = 0;
       } catch (err) {
+        // A timeout means Avectous (or NetSuite) was slow, not broken: try again next
+        // minute without counting it as an error. Only 30 timeouts in a row (half an
+        // hour of nothing but timeouts) stop the refresh. Oct 22: daily slowness at
+        // Avectous kept hitting the 6-error stop.
+        if (/timeout|timed out|abort/i.test(err.message)) {
+          st.timeouts = (st.timeouts || 0) + 1;
+          st.lastError = `${new Date(now()).toISOString()} ${step.kind}: ${err.message}`;
+          if (st.timeouts < MAX_TIMEOUTS) break;
+          err.message = `${err.message} (${MAX_TIMEOUTS} timeouts in a row: Avectous or NetSuite not answering)`;
+          st.errors = MAX_ERRORS - 1;
+        }
         st.errors++;
         if (/full rebuild queued/.test(err.message)) st.errors = MAX_ERRORS;
         st.lastError = `${new Date(now()).toISOString()} ${step.kind}: ${err.message}`;
@@ -764,6 +955,7 @@ export async function runTick({ store, results, clients, compute, alerts = null,
     st.progress = st.status === 'running' ? ctx.progress : '';
     // Email alerts about the refresh itself (stopped / too long / running again).
     if (alerts) { try { await alerts.checkRefresh(store, st, n => ctx.note(n)); } catch (err) { ctx.note(`Alert check failed: ${err.message}`); } }
+    if (alerts && alerts.checkStale) { try { await alerts.checkStale(store, st, n => ctx.note(n)); } catch (err) { ctx.note(`Alert check failed: ${err.message}`); } }
   } finally {
     // Daily summary: checked every minute, even between refreshes, so it goes at 9:30 sharp.
     if (alerts && alerts.checkDaily) { try { await alerts.checkDaily(store, results, now(), n => ctx.note(n)); } catch (err) { ctx.note(`Daily summary failed: ${err.message}`); } }
@@ -787,7 +979,7 @@ export async function request(store, action) {
     if (st.status === 'running' && st.mode === 'full') {
       st.status = 'idle'; st.steps = []; st.cursor = null; st.resume = null; st.progress = '';
       st.requested = 'now'; st.lastSlot = null;
-      st.history = [`${new Date().toISOString()} Switched to a quick refresh; the full refresh waits for Sunday night`, ...(st.history || [])].slice(0, 40);
+      st.history = [`${new Date().toISOString()} Switched to a quick refresh; the full refresh waits for Saturday night`, ...(st.history || [])].slice(0, 40);
     }
   }
   await putState(store, st);

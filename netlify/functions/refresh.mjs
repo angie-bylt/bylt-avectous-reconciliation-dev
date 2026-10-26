@@ -15,7 +15,8 @@ function summary(st) {
     step: step ? st.step + 1 : null, steps: st.steps ? st.steps.length : 0,
     progress: st.progress, requested: st.requested,
     cycleStartedAt: st.cycleStartedAt, lastSuccessAt: st.lastSuccessAt, lastFullAt: st.lastFullAt,
-    lastCycle: st.lastCycle, lastError: st.lastError, history: (st.history || []).slice(0, 12)
+    lastCycle: st.lastCycle, lastError: st.lastError, history: (st.history || []).slice(0, 12),
+    stale: st.stale || null    // pieces Avectous was too slow to answer for, showing earlier data
   };
 }
 

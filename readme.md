@@ -701,3 +701,64 @@ Replay of Oct 15-16: would have alerted at 11:30 PM (orders stopped ~10:10 PM).
   the hourly version of that alert steps aside. The flow check now runs even
   without Slack set up (the bar still fills in); only sending needs Slack. A card
   shows "Not set up yet" until its saved search exists.
+- Oct 21: weekly full refresh only starts Saturday 10 PM to Sunday 4 AM Pacific,
+  if the last full one was 6+ days ago and no full one was started in the last 6
+  days (st.lastFullTryAt). A full one that doesn't finish waits for next Saturday.
+  Before this, "any night if 8+ days" made an unfinishable 8-hour full refresh
+  start every night at 1:45 AM and hold up the morning numbers (Oct 17-21).
+- Oct 22: Avectous shipments step skips an order date that still times out at the
+  smallest page size (125 rows), after one more try: its partial pages are
+  dropped, its earlier shipments are kept (incremental and full), the rest of the
+  dates finish, and it's retried next hour. Before this, order date 10/14 timed
+  out at every size and stopped the refresh hour after hour (6 errors -> stop ->
+  resume at the same date -> stop).
+- Oct 22: slow Avectous no longer stops the refresh. Timeouts are retried the
+  next minute without counting toward the 6-error stop; only 30 in a row (MAX_
+  TIMEOUTS) stop it. Avectous orders shrinks pages to 125 rows, then skips that
+  status/date query for the hour (partial pages dropped, its orders kept as they
+  were, not treated as "left open"). One-at-a-time lookups ("left an open status")
+  skip an order that times out.
+- Oct 22: when Avectous is too slow for a piece (a shipments order date, or an
+  Avectous orders status/date), the refresh records it (st.stale, sent in
+  /api/refresh) and Systems shows "⏳ Some Avectous numbers are from an earlier
+  update: ... Everything else is current." It clears once that piece refreshes.
+- Oct 22: Slack alert when the same Avectous piece stays behind 3+ hours
+  (st.staleSince tracks when each skipped piece was first skipped; alerts.
+  checkStale sends once, then "✅ ... current again" when it refreshes).
+- Oct 22: Shopify merge fix. On Oct 22 a failed read of the saved Shopify copy
+  during the hourly merge saved only the changed orders (~49k of ~220k). Now: the
+  merge re-reads the saved copy, and if it still can't be read, nothing is saved
+  (retried; after 3 tries Shopify is skipped for the hour). A merge that would
+  shrink the saved copy by more than 2% (st.shopifyHigh) is refused. Saved copies
+  carry version 2; older ones are rebuilt once with a full pull.
+- Oct 22: hourly shipments pull no longer re-reads every older order date. Every
+  update: yesterday + today. Older dates with orders still shipping (from
+  leftOpen): at most 2 per update, each at most every 3 hours, oldest-refreshed
+  first (st.shpDayRefreshed). After 20 minutes the step starts no more older dates
+  (one already started is finished); the rest wait for the next update, keeping
+  their earlier shipments. On Oct 22 re-reading 5+ big days (30-45 min each at
+  Avectous's current speed) made the update run 4+ hours without finishing.
+- Oct 22: hourly shipments = yesterday + today by order date, plus one-by-one
+  Shipment Confirmations lookups (by OrderNumber) for older orders that just left
+  an open status (st.leftOpen now carries channel info) and any carried over
+  (st.shpPending). Lookups get at most 15 minutes per update; the rest and any
+  timeouts carry to the next hour. Their shipment rows replace that order's rows
+  in the saved copy. Whole old order days are no longer re-read hourly (the
+  Saturday-night full refresh still re-reads everything as the safety net).
+- Oct 26: the weekly full refresh no longer re-reads shipments by every order
+  date when a saved copy exists (Oct 24-26 the big recent days were too slow, kept
+  their pre-Saturday copies, and Saturday's shipments went missing). It uses the
+  hourly method instead. New hourly repair check: orders Avectous has as Shipped
+  with no shipment saved are looked up (oldest first, up to 3,000 queued per
+  update; lookups get 25 minutes; orders with no confirmation are skipped for a
+  day via st.shpNoConf). This backfills any gap on its own.
+- Oct 26: confirmation lookups run 6 at a time (SHP_LOOKUP_PARALLEL); repair
+  queue up to 6,000 per update. A weekend's catch-up fits in one update.
+- Oct 26: a weekly shipments pull already in progress from older code switches to
+  the quick method plus repair check (instead of finishing day by day).
+- Oct 26 (fix): one-by-one lookups now use Shipments by Order/Tracking (11900)
+  with an OrderNumber parameter, the same report the saved shipments come from.
+  The earlier lookups used Shipment Confirmations (11910), which stores order
+  numbers with a shipment suffix (#55847532-DI-1), so every lookup found nothing.
+  Verified against Avectous's own export for Oct 26: 1,916 rows / 1,880 orders,
+  exact match. The "no shipment" skip list starts fresh (st.shpNoShip).

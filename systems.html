@@ -31,6 +31,9 @@
   .now-card.ok .now-big{ color:#177a4c; } .now-card.bad .now-big{ color:#b42323; } .now-card.na .now-big{ color:#6b7684; }
   .now-sub{ font-size:11.5px; color:#5a6678; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   @media (max-width:980px){ .now-bar{ flex-direction:column; } .now-label{ flex-direction:row; justify-content:space-between; } }
+  .stale-note{ max-width:1360px; margin:10px auto 0; padding:0 28px; }
+  .stale-note div{ background:#fff7e6; border:1px solid #f2d9a6; color:#7a4d06; border-radius:12px; padding:9px 14px; font-size:13px; }
+  .stale-note b{ color:#5c3a04; }
   .sd-main{ max-width:1360px; margin:0 auto; padding:24px 28px 40px; }
   .live{ display:inline-flex; align-items:center; gap:7px; font-size:12.5px; border-radius:20px; padding:3px 11px; margin-left:10px; font-weight:600; vertical-align:middle; }
   .live.on{ color:#156b44; background:#e3f5ec; }
@@ -159,6 +162,7 @@
 
 <input type="file" id="shopFile" accept=".csv" multiple hidden>
 <div class="now" id="nowBar"></div>
+<div class="stale-note" id="staleNote"></div>
 <main class="sd-main">
   <div class="sd-sections">
     <section class="sd-sec" aria-labelledby="inTitle">
@@ -601,6 +605,18 @@ function renderNow(f){
     ${c1}${c2}${c3}</div>`;
 }
 
+// When Avectous was too slow to answer for a piece this hour, say so plainly:
+// that piece shows its last good numbers; everything else is current.
+function renderStale(st){
+  const el = document.getElementById('staleNote');
+  const parts = [];
+  if(st && st.shp && st.shp.dates && st.shp.dates.length) parts.push(`shipments for orders placed <b>${st.shp.dates.map(d => fmtDay(d)).join(', ')}</b>`);
+  if(st && st.avo && st.avo.items && st.avo.items.length) parts.push(`warehouse status for <b>${st.avo.items.map(x => escapeHtml(x.replace(/^status /, '').replace(/^order date (\d{4}-\d{2}-\d{2})/, (m, d) => 'orders placed ' + fmtDay(d)))).join(', ')}</b> orders`);
+  el.innerHTML = parts.length
+    ? `<div>\u23F3 <b>Some Avectous numbers are from an earlier update:</b> ${parts.join(' and ')}. Avectous was too slow to answer this hour; the dashboard tries again next hour. Everything else is current.</div>`
+    : '';
+}
+
 async function loadLive(savedAt){
   const el = document.getElementById('live');
   try{
@@ -608,6 +624,7 @@ async function loadLive(savedAt){
     const s = await res.json();
     if(!s.ok) throw 0;
     renderNow(s.flow);
+    renderStale(s.stale);
     const mins = savedAt ? Math.max(0, Math.round((Date.now() - Date.parse(savedAt)) / 60000)) : null;
     const ago = mins === null ? '' : mins < 60 ? `${mins} min ago` : `${Math.round(mins / 60)} hr ago`;
     el.innerHTML = s.paused

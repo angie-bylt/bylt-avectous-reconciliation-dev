@@ -159,6 +159,45 @@ export async function checkRefresh(store, rs, note) {
   }
 }
 
+// ---------- A piece of Avectous data stuck behind for 3+ hours ----------
+// When Avectous is too slow for one piece (a shipments order date, or an orders
+// status), the dashboard keeps that piece's last numbers and updates the rest.
+// If the same piece is still behind after 3 hours, say so once; then once more
+// when it catches up.
+const STALE_ALERT_MS = 3 * 3600 * 1000;
+function staleLabel(key) {
+  const [kind, ...rest] = key.split(':'); const what = rest.join(':');
+  if (kind === 'shp') return `shipments for orders placed ${fmtDay(what)}`;
+  return 'warehouse status for ' + what.replace(/^status /, '').replace(/^order date (\d{4}-\d{2}-\d{2})/, (m, d) => 'orders placed ' + fmtDay(d)) + ' orders';
+}
+export async function checkStale(store, rs, note) {
+  if (!alertsConfigured()) return;
+  const st = (await store.get('alerts:state', { type: 'json' })) || { cards: {} };
+  const noted = st.staleNoted || {};
+  const since = rs.staleSince || {};
+  const sends = [];
+  for (const [k, iso] of Object.entries(since)) {
+    if (!noted[k] && Date.now() - Date.parse(iso) >= STALE_ALERT_MS) {
+      noted[k] = true;
+      const hrs = Math.floor((Date.now() - Date.parse(iso)) / 3600000);
+      sends.push([`\u23F3 Avectous has been too slow to answer for ${staleLabel(k)} for ${hrs} hours.`,
+        ['The dashboard is showing older numbers for that piece; everything else is current.',
+         '*What to do:* ask Alan why Avectous is slow for this. The dashboard keeps trying every hour.']]);
+    }
+  }
+  for (const k of Object.keys(noted)) if (!since[k]) {
+    delete noted[k];
+    sends.push([`\u2705 Avectous answered for ${staleLabel(k)}. Those numbers are current again.`, []]);
+  }
+  if (!sends.length) return;
+  st.staleNoted = noted;
+  await store.setJSON('alerts:state', st);
+  for (const [subject, lines] of sends) {
+    try { await sendAlert(subject, lines); note(`Alert sent: ${subject}`); }
+    catch (err) { note(`Alert failed to send: ${err.message}`); }
+  }
+}
+
 // ---------- Daily summary, 7:30 AM Pacific ----------
 // One short message each morning from the latest saved numbers, with the change
 // in missing counts since the previous morning's summary. Sent once per day, the
